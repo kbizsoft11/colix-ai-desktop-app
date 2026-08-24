@@ -72,14 +72,24 @@ class ShortcutListener:
 
     def replace_text(self, character_count):
         """Remove the typed trigger and paste the clipboard into the target app."""
+        import platform
+        
         for _ in range(max(0, character_count)):
             self.controller.press(keyboard.Key.backspace)
             self.controller.release(keyboard.Key.backspace)
 
-        self.controller.press(keyboard.Key.ctrl)
-        self.controller.press('v')
-        self.controller.release('v')
-        self.controller.release(keyboard.Key.ctrl)
+        # Mac uses Cmd+V, Windows/Linux uses Ctrl+V
+        if platform.system() == 'Darwin':
+            self.controller.press(keyboard.Key.cmd)
+            self.controller.press('v')
+            self.controller.release('v')
+            self.controller.release(keyboard.Key.cmd)
+        else:
+            self.controller.press(keyboard.Key.ctrl)
+            self.controller.press('v')
+            self.controller.release('v')
+            self.controller.release(keyboard.Key.ctrl)
+
         self.typed_buffer = ""
 
 

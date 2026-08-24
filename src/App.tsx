@@ -265,7 +265,11 @@ function App() {
   }
 
   if (authLoading) {
-    return <main className="auth-screen"><div className="auth-loading">Loading ColixAI...</div></main>
+    return <main className="auth-screen">
+      <div className="auth-loading">
+        <img className="w-20 h-20 rounded-full" src={logo} alt="ColixAI" />
+      </div>
+    </main>
   }
 
   if (!session) return <LoginScreen />
