@@ -120,10 +120,11 @@ export class KeyboardHook {
   private spawnPythonListener(): void {
     try {
       const isPackaged = !process.env.VITE_DEV_SERVER_URL
+      const exeName = process.platform === 'win32' ? 'listener.exe' : 'listener'
 
       const cmd = isPackaged
-        ? path.join(process.resourcesPath, 'listener.exe')
-        : 'python.exe'
+        ? path.join(process.resourcesPath, exeName)
+        : process.platform === 'win32' ? 'python.exe' : 'python3'
 
       const args = isPackaged
         ? []

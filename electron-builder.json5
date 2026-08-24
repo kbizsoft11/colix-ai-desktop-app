@@ -12,6 +12,10 @@
       from: "python-dist/listener.exe",
       to: "listener.exe",
     },
+    {
+      from: "python-dist/listener",
+      to: "listener",
+    },
   ],
   mac: {
     target: ["dmg"],
