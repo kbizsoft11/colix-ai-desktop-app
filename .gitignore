@@ -17,6 +17,7 @@ dist-electron
 __pycache__
 python-dist
 *.spec
+.venv
 
 # Dependencies
 node_modules
@@ -30,7 +31,6 @@ node_modules
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
 *.suo
 *.ntvs*
 *.njsproj
@@ -39,3 +39,29 @@ node_modules
 
 # Local
 *.local
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+*.icns
+icon.iconset/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
