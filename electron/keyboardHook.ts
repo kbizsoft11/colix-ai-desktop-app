@@ -15,6 +15,132 @@ interface Shortcut {
   updatedAt: number
 }
 
+interface DynamicField {
+  label: string
+  defaultValue: string
+}
+
+function htmlToPlainText(value: string): string {
+  return value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '\n- ')
+    .replace(/<\/(p|div|h[1-6]|li|ol|ul)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\n\s*\n+/g, '\n')
+    .trim()
+}
+
+function clipboardText(value: string): string {
+  return /<\/?[a-z][\s\S]*>/i.test(value) ? htmlToPlainText(value) : value.replace(/\n\s*\n+/g, '\n')
+}
+
+function clipboardHtml(value: string): string {
+  return `<style>p,div,h1,h2,h3,h4,h5,h6{margin:0;padding:0}ul,ol{margin-top:0;margin-bottom:0}</style>${value}`
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function decodeHtml(value: string): string {
+  return value.replace(/&quot;/gi, '"').replace(/&gt;/gi, '>').replace(/&lt;/gi, '<').replace(/&amp;/gi, '&')
+}
+
+function formatDateTime(format: string): string {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const hour12 = now.getHours() % 12 || 12
+  const replacements: Record<string, string> = {
+    YYYY: String(now.getFullYear()),
+    MMMM: months[now.getMonth()],
+    MMM: months[now.getMonth()].slice(0, 3),
+    MM: pad(now.getMonth() + 1),
+    DD: pad(now.getDate()),
+    D: String(now.getDate()),
+    dddd: weekdays[now.getDay()],
+    ddd: weekdays[now.getDay()].slice(0, 3),
+    HH: pad(now.getHours()),
+    hh: pad(hour12),
+    mm: pad(now.getMinutes()),
+    ss: pad(now.getSeconds()),
+    A: now.getHours() >= 12 ? 'PM' : 'AM',
+    a: now.getHours() >= 12 ? 'pm' : 'am',
+  }
+  return format.replace(/YYYY|MMMM|MMM|MM|DD|dddd|ddd|D|HH|hh|mm|ss|A|a/g, token => replacements[token])
+}
+
+function resolveDynamicContent(content: string, latestClipboard: string, shortcuts: Shortcut[], fieldValues: Record<string, string>, visited = new Set<string>()): string {
+  const isHtml = /<\/?[a-z][\s\S]*>/i.test(content)
+  const clipboardValue = isHtml ? escapeHtml(latestClipboard) : latestClipboard
+  let resolved = content.replace(/<span[^>]*data-snippet-trigger="([\-@][^"<>]+)"[^>]*>.*?<\/span>\s*(?:&nbsp;)?/gis, (_match, trigger: string) => {
+    if (visited.has(trigger)) return ''
+    const source = shortcuts.find(shortcut => shortcut.name === trigger)
+    if (!source) return ''
+    const nextVisited = new Set(visited).add(trigger)
+    const sourceContent = resolveDynamicContent(source.content, latestClipboard, shortcuts, fieldValues, nextVisited)
+    const sourceIsRich = /<\/?[a-z][\s\S]*>/i.test(source.content)
+    return isHtml ? sourceIsRich ? sourceContent : escapeHtml(sourceContent) : clipboardText(sourceContent)
+  })
+  resolved = resolved.replace(/<span[^>]*data-field-label="([^"]+)"[^>]*>.*?<\/span>\s*(?:&nbsp;)?/gis, (_match, label: string) => {
+    const value = fieldValues[decodeHtml(label)] ?? ''
+    return isHtml ? escapeHtml(value) : value
+  })
+  return resolved
+    .replace(/\{\{clipboard\}\}/gi, clipboardValue)
+    .replace(/\{\{datetime:([^}]+)\}\}/gi, (_match, format: string) => {
+      const value = formatDateTime(format)
+      return isHtml ? escapeHtml(value) : value
+    })
+    .replace(/\{\{formula:([^}]+)\}\}/gi, (_match, expression: string) => {
+      if (!/^[0-9+*/().\s-]+$/.test(expression.trim())) return ''
+      try {
+        const value = Function(`"use strict"; return (${expression})`)()
+        return typeof value === 'number' && Number.isFinite(value) ? isHtml ? escapeHtml(String(value)) : String(value) : ''
+      } catch {
+        return ''
+      }
+    })
+    .replace(/\{\{ifelse:([^}]+)\}\}/gi, (_match, payload: string) => {
+      const parts = payload.split('|')
+      if (parts.length !== 3) return ''
+      try {
+        const [condition, yesText, noText] = parts.map(part => decodeURIComponent(part))
+        if (!/^[0-9+*/().\s<>=!-]+$/.test(condition.trim()) || !/(<=|>=|==|!=|<|>)/.test(condition) || /(^|[^=!<>])=([^=]|$)/.test(condition)) return ''
+        const matches = Function(`"use strict"; return (${condition})`)()
+        if (typeof matches !== 'boolean') return ''
+        const result = matches ? yesText : noText
+        return isHtml ? escapeHtml(result) : result
+      } catch {
+        return ''
+      }
+    })
+}
+
+function previewDynamicContent(content: string, shortcuts: Shortcut[], visited = new Set<string>()): string {
+  return content
+    .replace(/<span[^>]*data-snippet-trigger="([\-@][^"<>]+)"[^>]*>.*?<\/span>\s*(?:&nbsp;)?/gis, (_match, trigger: string) => {
+      if (visited.has(trigger)) return ''
+      const source = shortcuts.find(shortcut => shortcut.name === trigger)
+      return source ? previewDynamicContent(source.content, shortcuts, new Set(visited).add(trigger)) : ''
+    })
+    .replace(/\{\{datetime:([^}]+)\}\}/gi, (_match, format: string) => formatDateTime(format))
+    .replace(/\{\{formula:([^}]+)\}\}/gi, (_match, expression: string) => {
+      if (!/^[0-9+*/().\s-]+$/.test(expression.trim())) return ''
+      try {
+        const value = Function(`"use strict"; return (${expression})`)()
+        return typeof value === 'number' && Number.isFinite(value) ? String(value) : ''
+      } catch {
+        return ''
+      }
+    })
+}
+
 /**
  * Keyboard Hook using Python + pynput
  * Spawns a Python process that listens to all keystrokes globally
@@ -27,9 +153,11 @@ export class KeyboardHook {
   private stdoutBuffer = ''
   private replacementInProgress = false
   private testingInputFocused = false
+  private requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null
 
-  constructor(mainWindow: BrowserWindow | null) {
+  constructor(mainWindow: BrowserWindow | null, requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null = null) {
     this.mainWindow = mainWindow
+    this.requestFieldValues = requestFieldValues
   }
 
   setTestingInputFocused(focused: boolean): void {
@@ -132,7 +260,9 @@ export class KeyboardHook {
 
       console.log(`⚙️ Listener: ${cmd}`)
 
-      if (!existsSync(cmd)) {
+      // In development, Python may be installed on PATH rather than in the
+      // project directory. The packaged listener must still exist explicitly.
+      if (isPackaged && !existsSync(cmd)) {
         console.error(`❌ Listener not found: ${cmd}`)
         this.isActive = false
         this.mainWindow?.webContents.send('keyboard-hook-ready', false)
@@ -246,7 +376,7 @@ export class KeyboardHook {
         console.log(`🔄 REPLACING WITH: "${data.content}"`)
 
         // Request replacement through the Python keyboard listener.
-        this.requestReplacement(data.trigger, data.content)
+        void this.requestReplacement(data.trigger, data.content)
 
         // Notify UI
         if (this.mainWindow) {
@@ -264,7 +394,7 @@ export class KeyboardHook {
   /**
    * Request replacement through the Python keyboard listener
    */
-  private requestReplacement(trigger: string, content: string): void {
+  private async requestReplacement(trigger: string, content: string): Promise<void> {
     if (this.replacementInProgress) {
       console.log('⏭️ Replacement already in progress; ignoring overlapping trigger')
       return
@@ -274,7 +404,26 @@ export class KeyboardHook {
     try {
       console.log(`📋 Preparing instant replacement (${content.length} characters)`)
       const previousClipboardText = clipboard.readText()
-      clipboard.writeText(content)
+      const fieldMatches = [...content.matchAll(/<span[^>]*data-field-label="([^"]+)"[^>]*>/gi)]
+      let fieldValues: Record<string, string> = {}
+      if (fieldMatches.length) {
+        const fields: DynamicField[] = fieldMatches.map(match => ({
+          label: decodeHtml(match[1]),
+          defaultValue: decodeHtml(match[0].match(/data-field-default="([^"]*)"/i)?.[1] || ''),
+        }))
+        const values = this.requestFieldValues ? await this.requestFieldValues(fields, previewDynamicContent(content, this.shortcuts)) : null
+        if (!values) return
+        fieldValues = values
+        // Allow Windows to restore focus to the application where the trigger was typed.
+        await new Promise(resolve => setTimeout(resolve, 180))
+      }
+      const resolvedContent = resolveDynamicContent(content, previousClipboardText, this.shortcuts, fieldValues)
+      const isHtml = /<\/?[a-z][\s\S]*>/i.test(resolvedContent)
+      if (isHtml) {
+        clipboard.write({ text: clipboardText(resolvedContent), html: clipboardHtml(resolvedContent) })
+      } else {
+        clipboard.writeText(resolvedContent)
+      }
       this.pythonProcess?.stdin?.write(JSON.stringify({
         type: 'replace_text',
         character_count: trigger.length,
@@ -310,6 +459,7 @@ export class KeyboardHook {
  */
 export function createKeyboardHook(
   mainWindow: BrowserWindow | null,
+  requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null = null,
 ): KeyboardHook {
-  return new KeyboardHook(mainWindow)
+  return new KeyboardHook(mainWindow, requestFieldValues)
 }

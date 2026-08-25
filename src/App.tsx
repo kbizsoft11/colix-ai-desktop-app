@@ -9,6 +9,7 @@ import { shortcutService } from './services/shortcutService'
 import { storageManager } from './utils/storageManager'
 import { Shortcut, ShortcutFolder, ShortcutInput } from './types/shortcut'
 import logo from "./assets/logo.png"
+import { richTextToPlainText } from './utils/richText'
 
 type IconName = 'plus' | 'folder' | 'bolt' | 'search' | 'user' | 'edit' | 'trash' | 'copy' | 'back' | 'grid' | 'book' | 'chevron' | 'logout'
 
@@ -48,6 +49,7 @@ function App() {
   const [draggedShortcutId, setDraggedShortcutId] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; shortcut: Shortcut } | null>(null)
   const [folderDialog, setFolderDialog] = useState<{ mode: 'create' | 'rename'; folderId?: string; name: string } | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void | Promise<void> } | null>(null)
 
   useEffect(() => {
     if (!supabase) {
@@ -120,7 +122,7 @@ function App() {
   const visibleShortcuts = useMemo(() => shortcuts.filter(shortcut => {
     const inFolder = shortcut.folderId === activeFolderId || (!shortcut.folderId && activeFolderId === folders[0]?.id)
     const query = searchQuery.toLowerCase()
-    return inFolder && (!query || shortcut.name.toLowerCase().includes(query) || shortcut.label.toLowerCase().includes(query) || shortcut.content.toLowerCase().includes(query))
+    return inFolder && (!query || shortcut.name.toLowerCase().includes(query) || shortcut.label.toLowerCase().includes(query) || richTextToPlainText(shortcut.content).toLowerCase().includes(query))
   }), [activeFolderId, folders, searchQuery, shortcuts])
 
   const openCreate = () => {
@@ -167,13 +169,13 @@ function App() {
   }
 
   const deleteShortcut = async (id: string) => {
-    if (!window.confirm('Delete this shortcut?')) return
     if (!supabase || !session || !profileUserId) return
     try {
       await shortcutService.remove(supabase, profileUserId, id)
       const next = shortcuts.filter(shortcut => shortcut.id !== id)
       setShortcuts(next)
       void ipcService.updateShortcuts(next)
+      if (editingId === id) finishEditor()
       notify('Shortcut deleted')
     } catch (error) {
       console.error('Error deleting shortcut from Supabase:', error)
@@ -182,7 +184,7 @@ function App() {
   }
 
   const deleteVisibleShortcuts = async () => {
-    if (!visibleShortcuts.length || !window.confirm('Delete all visible shortcuts?')) return
+    if (!visibleShortcuts.length) return
     if (!supabase || !session || !profileUserId) return
     try {
       await Promise.all(visibleShortcuts.map(shortcut => shortcutService.remove(supabase!, profileUserId, shortcut.id)))
@@ -196,6 +198,25 @@ function App() {
     setShortcuts(next)
     void ipcService.updateShortcuts(next)
     notify('Shortcuts deleted')
+  }
+
+  const requestDeleteShortcut = (shortcut: Shortcut) => {
+    setConfirmDialog({
+      title: 'Delete shortcut?',
+      message: `This will permanently remove "${shortcut.label}" from your shortcuts.`,
+      confirmLabel: 'Delete shortcut',
+      onConfirm: () => deleteShortcut(shortcut.id),
+    })
+  }
+
+  const requestDeleteVisibleShortcuts = () => {
+    if (!visibleShortcuts.length) return
+    setConfirmDialog({
+      title: 'Delete all visible shortcuts?',
+      message: `This will remove ${visibleShortcuts.length} shortcut${visibleShortcuts.length === 1 ? '' : 's'} from this folder.`,
+      confirmLabel: 'Delete all',
+      onConfirm: deleteVisibleShortcuts,
+    })
   }
 
   const createFolder = () => {
@@ -277,24 +298,26 @@ function App() {
   if (showEditor) {
     return (
       <div className="app-shell">
-        <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} />
+        <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={finishEditor} />
         <div className="workspace editor-workspace">
           <Sidebar folders={folders} shortcuts={shortcuts} activeFolderId={activeFolderId} setActiveFolderId={setActiveFolderId} onCreateFolder={createFolder} onRenameFolder={renameFolder} onDeleteFolder={deleteFolder} onCreateShortcut={openCreate} onEdit={openEdit} onDragStart={setDraggedShortcutId} onDrop={moveShortcut} onContextMenu={showShortcutContextMenu} />
-          <main className="editor-main"><ShortcutForm key={editingId || 'new'} isEditing={Boolean(editingId)} initialData={editingData} onSubmit={handleSave} onCancel={finishEditor} /></main>
+          <main className="editor-main"><ShortcutForm key={editingId || 'new'} isEditing={Boolean(editingId)} initialData={editingData} availableShortcuts={shortcuts} currentShortcutId={editingId} onSubmit={handleSave} onCancel={finishEditor} /></main>
         </div>
         {notification && <div className="toast">{notification}</div>}
         {folderDialog && <FolderDialog dialog={folderDialog} setDialog={setFolderDialog} onSave={saveFolder} />}
+        {contextMenu && <div className="shortcut-context-menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 190), top: Math.min(contextMenu.y, window.innerHeight - 125) }} onClick={event => event.stopPropagation()}><div className="context-menu-title">{contextMenu.shortcut.label}</div><button onClick={() => { openEdit(contextMenu.shortcut); setContextMenu(null) }}><Icon name="edit" size={15} /> Edit shortcut</button><button onClick={() => { void ipcService.copyRichText(contextMenu.shortcut.content); notify('Copied to clipboard'); setContextMenu(null) }}><Icon name="copy" size={15} /> Copy content</button><button className="context-delete" onClick={() => { requestDeleteShortcut(contextMenu.shortcut); setContextMenu(null) }}><Icon name="trash" size={15} /> Delete shortcut</button></div>}
+        {confirmDialog && <ConfirmDialog dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />}
       </div>
     )
   }
 
   return (
     <div className="app-shell">
-      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} />
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => undefined} />
       <div className="workspace">
         <Sidebar folders={folders} shortcuts={shortcuts} activeFolderId={activeFolderId} setActiveFolderId={setActiveFolderId} onCreateFolder={createFolder} onRenameFolder={renameFolder} onDeleteFolder={deleteFolder} onCreateShortcut={openCreate} onEdit={openEdit} onDragStart={setDraggedShortcutId} onDrop={moveShortcut} onContextMenu={showShortcutContextMenu} />
         <main className="dashboard-main">
-          <div className="page-heading"><div><h1>{activeFolder?.name || 'My Shortcuts'} <span>{visibleShortcuts.length}</span></h1><p>Type a shortcut below to test it before using it anywhere on your computer.</p></div><button className="button button-danger" onClick={deleteVisibleShortcuts}><Icon name="trash" size={15} /> Delete all</button></div>
+          <div className="page-heading"><div><h1>{activeFolder?.name || 'My Shortcuts'} <span>{visibleShortcuts.length}</span></h1><p>Type a shortcut below to test it before using it anywhere on your computer.</p></div><button className="button button-danger" onClick={requestDeleteVisibleShortcuts}><Icon name="trash" size={15} /> Delete all</button></div>
           <section className="welcome-card">
             <h2 className="font-mono font-semibold">Welcome to ColixAI</h2>
             <p>Type a shortcut trigger below, such as <code>-ty</code> or <code>@email</code>. It will instantly expand into text.</p>
@@ -303,7 +326,7 @@ function App() {
           </section>
           <section className="quick-actions"><strong>Quick actions:</strong><button className="button button-primary" onClick={openCreate}><Icon name="plus" size={15} /> New shortcut</button><button className="button button-light" onClick={createFolder}><Icon name="folder" size={15} /> New folder</button></section>
           <section className="shortcut-grid">
-            {visibleShortcuts.map(shortcut => <article className="shortcut-card" key={shortcut.id} draggable onDragStart={() => setDraggedShortcutId(shortcut.id)}><div className="shortcut-card-top"><span className="bolt"><Icon name="bolt" size={16} /></span><div><h3>{shortcut.label}</h3><code>{shortcut.name}</code></div><button className="icon-button" onClick={() => openEdit(shortcut)} aria-label="Edit shortcut"><Icon name="edit" size={16} /></button></div><p>{shortcut.content}</p><div className="card-actions"><button onClick={() => navigator.clipboard.writeText(shortcut.content).then(() => notify('Copied to clipboard'))}><Icon name="copy" size={14} /> Copy</button><button className="delete-link" onClick={() => deleteShortcut(shortcut.id)}><Icon name="trash" size={14} /> Delete</button></div></article>)}
+            {visibleShortcuts.map(shortcut => <article className="shortcut-card" key={shortcut.id} draggable onDragStart={() => setDraggedShortcutId(shortcut.id)}><div className="shortcut-card-top"><span className="bolt"><Icon name="bolt" size={16} /></span><div><h3>{shortcut.label}</h3><code>{shortcut.name}</code></div><button className="icon-button" onClick={() => openEdit(shortcut)} aria-label="Edit shortcut"><Icon name="edit" size={16} /></button></div><p>{richTextToPlainText(shortcut.content)}</p><div className="card-actions"><button onClick={() => ipcService.copyRichText(shortcut.content).then(() => notify('Copied to clipboard'))}><Icon name="copy" size={14} /> Copy</button><button className="delete-link" onClick={() => requestDeleteShortcut(shortcut)}><Icon name="trash" size={14} /> Delete</button></div></article>)}
             {!visibleShortcuts.length && <div className="empty-state"><div className="empty-icon"><Icon name="bolt" /></div><h3>No shortcuts in this folder</h3><p>Create a shortcut or drag one here from another folder.</p><button className="button button-primary" onClick={openCreate}><Icon name="plus" size={15} /> Create shortcut</button></div>}
           </section>
         </main>
@@ -311,15 +334,16 @@ function App() {
       </div>
       {notification && <div className="toast">{notification}</div>}
       {folderDialog && <FolderDialog dialog={folderDialog} setDialog={setFolderDialog} onSave={saveFolder} />}
-      {contextMenu && <div className="shortcut-context-menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 190), top: Math.min(contextMenu.y, window.innerHeight - 125) }} onClick={event => event.stopPropagation()}><div className="context-menu-title">{contextMenu.shortcut.label}</div><button onClick={() => { openEdit(contextMenu.shortcut); setContextMenu(null) }}><Icon name="edit" size={15} /> Edit shortcut</button><button onClick={() => { void navigator.clipboard.writeText(contextMenu.shortcut.content); notify('Copied to clipboard'); setContextMenu(null) }}><Icon name="copy" size={15} /> Copy content</button><button className="context-delete" onClick={() => { deleteShortcut(contextMenu.shortcut.id); setContextMenu(null) }}><Icon name="trash" size={15} /> Delete shortcut</button></div>}
+      {contextMenu && <div className="shortcut-context-menu" style={{ left: Math.min(contextMenu.x, window.innerWidth - 190), top: Math.min(contextMenu.y, window.innerHeight - 125) }} onClick={event => event.stopPropagation()}><div className="context-menu-title">{contextMenu.shortcut.label}</div><button onClick={() => { openEdit(contextMenu.shortcut); setContextMenu(null) }}><Icon name="edit" size={15} /> Edit shortcut</button><button onClick={() => { void ipcService.copyRichText(contextMenu.shortcut.content); notify('Copied to clipboard'); setContextMenu(null) }}><Icon name="copy" size={15} /> Copy content</button><button className="context-delete" onClick={() => { requestDeleteShortcut(contextMenu.shortcut); setContextMenu(null) }}><Icon name="trash" size={15} /> Delete shortcut</button></div>}
+      {confirmDialog && <ConfirmDialog dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />}
     </div>
   )
 }
 
-function Header({ searchQuery, setSearchQuery, email, onLogout }: { searchQuery: string; setSearchQuery: (value: string) => void; email: string | undefined; onLogout: () => void | Promise<void> }) {
+function Header({ searchQuery, setSearchQuery, email, onLogout, onHome }: { searchQuery: string; setSearchQuery: (value: string) => void; email: string | undefined; onLogout: () => void | Promise<void>; onHome: () => void }) {
   const initial = email?.trim().charAt(0).toUpperCase() || 'U'
   return <header className="top-header">
-    <div className="brand-mark">ColixAI</div>
+    <button className="brand-mark" onClick={onHome} aria-label="Go to shortcuts home">ColixAI</button>
     <div className="header-actions">
       <div className="header-search">
         <Icon name="search" size={16} />
@@ -338,6 +362,27 @@ function Header({ searchQuery, setSearchQuery, email, onLogout }: { searchQuery:
 }
 
 function Sidebar({ folders, shortcuts, activeFolderId, setActiveFolderId, onCreateFolder, onRenameFolder, onDeleteFolder, onCreateShortcut, onEdit, onDragStart, onDrop, onContextMenu }: { folders: ShortcutFolder[]; shortcuts: Shortcut[]; activeFolderId: string; setActiveFolderId: (id: string) => void; onCreateFolder: () => void; onRenameFolder: (folder: ShortcutFolder) => void; onDeleteFolder: (folder: ShortcutFolder) => void; onCreateShortcut: () => void; onEdit: (shortcut: Shortcut) => void; onDragStart: (id: string) => void; onDrop: (folderId: string) => void; onContextMenu: (x: number, y: number, shortcut: Shortcut) => void }) {
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (!activeFolderId) return
+    setExpandedFolders(previous => new Set(previous).add(activeFolderId))
+  }, [activeFolderId])
+
+  const toggleFolder = (folderId: string) => {
+    if (activeFolderId !== folderId) {
+      setActiveFolderId(folderId)
+      setExpandedFolders(previous => new Set(previous).add(folderId))
+      return
+    }
+    setExpandedFolders(previous => {
+      const next = new Set(previous)
+      if (next.has(folderId)) next.delete(folderId)
+      else next.add(folderId)
+      return next
+    })
+  }
+
   return <aside className="sidebar">
     <div className="sidebar-brand">
       <span className="sidebar-logo">
@@ -355,7 +400,7 @@ function Sidebar({ folders, shortcuts, activeFolderId, setActiveFolderId, onCrea
     </div>
     <div className="folder-list">{folders.map(folder => <div key={folder.id} className={`folder-block ${activeFolderId === folder.id ? 'folder-active' : ''}`} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); onDrop(folder.id) }}>
       <div className="folder-row-wrap">
-        <button className="folder-row" onClick={() => setActiveFolderId(folder.id)}>
+        <button className="folder-row" onClick={() => toggleFolder(folder.id)} aria-expanded={expandedFolders.has(folder.id)}>
           <Icon name="chevron" size={15} />
           <span className="folder-icon">
             <Icon name="folder" size={17} />
@@ -368,7 +413,7 @@ function Sidebar({ folders, shortcuts, activeFolderId, setActiveFolderId, onCrea
         </button>{folders.length > 1 && folder.id !== 'default-folder' && <button className="folder-delete" onClick={() => onDeleteFolder(folder)} aria-label="Delete folder">
           <Icon name="trash" size={13} />
         </button>}
-      </div>{activeFolderId === folder.id && <div className="folder-shortcuts">{shortcuts.filter(shortcut => shortcut.folderId === folder.id || (!shortcut.folderId && folder === folders[0])).map(shortcut => <button key={shortcut.id} className="sidebar-shortcut" draggable onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', shortcut.id); onDragStart(shortcut.id) }} onClick={() => onEdit(shortcut)} onContextMenu={event => { event.preventDefault(); onContextMenu(event.clientX, event.clientY, shortcut) }}>
+      </div>{expandedFolders.has(folder.id) && <div className="folder-shortcuts">{shortcuts.filter(shortcut => shortcut.folderId === folder.id || (!shortcut.folderId && folder === folders[0])).map(shortcut => <button key={shortcut.id} className="sidebar-shortcut" draggable onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', shortcut.id); onDragStart(shortcut.id) }} onClick={() => onEdit(shortcut)} onContextMenu={event => { event.preventDefault(); onContextMenu(event.clientX, event.clientY, shortcut) }}>
         <span className="shortcut-bolt"><Icon name="bolt" size={14} />
         </span>
         <span className="sidebar-shortcut-label">{shortcut.label}</span>
@@ -431,6 +476,25 @@ function FolderDialog({ dialog, setDialog, onSave }: { dialog: { mode: 'create' 
         <button type="submit" className="button button-primary">{dialog.mode === 'create' ? 'Create folder' : 'Save name'}</button>
       </div>
     </form>
+  </div>
+}
+
+function ConfirmDialog({ dialog, onClose }: { dialog: { title: string; message: string; confirmLabel: string; onConfirm: () => void | Promise<void> }; onClose: () => void }) {
+  const confirm = async () => {
+    await dialog.onConfirm()
+    onClose()
+  }
+
+  return <div className="dialog-backdrop" onMouseDown={onClose}>
+    <section className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" onMouseDown={event => event.stopPropagation()}>
+      <div className="confirm-icon"><Icon name="trash" size={19} /></div>
+      <h2 id="confirm-title">{dialog.title}</h2>
+      <p>{dialog.message}</p>
+      <div className="dialog-actions">
+        <button type="button" className="button button-light" onClick={onClose}>Cancel</button>
+        <button type="button" className="button button-danger confirm-delete" onClick={() => void confirm()}>{dialog.confirmLabel}</button>
+      </div>
+    </section>
   </div>
 }
 

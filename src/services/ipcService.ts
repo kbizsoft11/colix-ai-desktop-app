@@ -69,6 +69,10 @@ export const ipcService = {
     window.ipcRenderer.send('notification', message)
   },
 
+  copyRichText: async (content: string): Promise<void> => {
+    await window.ipcRenderer.invoke('copy-rich-text', content)
+  },
+
   setShortcutTestFocused: (focused: boolean) => {
     window.ipcRenderer.send('shortcut-test-focus', focused)
   },
