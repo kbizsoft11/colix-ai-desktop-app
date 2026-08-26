@@ -32,7 +32,7 @@ export default function ShortcutItem({
             <code className="inline-block bg-gray-100 text-blue-600 px-3 py-1 rounded font-mono text-sm font-semibold">
               {shortcut.name}
             </code>
-            <h3 className="text-lg font-semibold text-gray-900">{shortcut.label}</h3>
+            <h3 className="text-lg font-semibold text-gray-900">{shortcut.label.trim() || shortcut.name}</h3>
           </div>
 
           <p className="text-gray-600 text-sm mb-3 line-clamp-2">

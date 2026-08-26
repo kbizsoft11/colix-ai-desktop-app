@@ -45,6 +45,19 @@ export const ipcService = {
   },
 
   /**
+   * Toggle paste functionality
+   */
+  togglePaste: async (enabled: boolean): Promise<{ success: boolean; message: string }> => {
+    try {
+      const result = await window.ipcRenderer.invoke('toggle-paste', enabled)
+      return result
+    } catch (error) {
+      console.error('Error toggling paste:', error)
+      return { success: false, message: 'Failed to toggle paste' }
+    }
+  },
+
+  /**
    * Listen for keyboard hook ready event
    */
   onKeyboardHookReady: (callback: (isReady: boolean) => void) => {

@@ -154,6 +154,7 @@ export class KeyboardHook {
   private replacementInProgress = false
   private testingInputFocused = false
   private requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null
+  private isPasteEnabled: boolean = true
 
   constructor(mainWindow: BrowserWindow | null, requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null = null) {
     this.mainWindow = mainWindow
@@ -162,6 +163,11 @@ export class KeyboardHook {
 
   setTestingInputFocused(focused: boolean): void {
     this.testingInputFocused = focused
+  }
+
+  setPasteEnabled(enabled: boolean): void {
+    this.isPasteEnabled = enabled
+    console.log(`🔀 Paste functionality ${enabled ? 'ENABLED' : 'DISABLED'}`)
   }
 
   /**
@@ -370,6 +376,12 @@ export class KeyboardHook {
         // event here instead of asking Python to inspect Windows processes.
         if (this.mainWindow?.isFocused() && !this.testingInputFocused) {
           console.log('⏭️ Ignoring shortcut while ColixAI is focused')
+          return
+        }
+
+        // Check if paste is enabled
+        if (!this.isPasteEnabled) {
+          console.log('🔒 Paste functionality is disabled; ignoring shortcut')
           return
         }
 

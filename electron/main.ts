@@ -88,13 +88,15 @@ function showFieldWindow(fields: DynamicField[], content: string): Promise<Recor
 
 function createWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize
+  const isPackaged = !process.env.VITE_DEV_SERVER_URL
+  
   win = new BrowserWindow({
     width: Math.round(screenWidth * 0.85),
     height: Math.round(screenHeight * 0.85),
     minWidth: 760,
     minHeight: 560,
     center: true,
-    autoHideMenuBar: true,
+    autoHideMenuBar: isPackaged,
     icon: path.join(process.env.VITE_PUBLIC, 'electron-vite.svg'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
@@ -225,6 +227,23 @@ ipcMain.handle('update-shortcuts', async (_event, shortcuts: HookShortcuts) => {
   } catch (error) {
     console.error('Error updating shortcuts:', error)
     return { success: false, message: 'Failed to update shortcuts' }
+  }
+})
+
+/**
+ * Toggle paste functionality
+ */
+ipcMain.handle('toggle-paste', async (_event, enabled: boolean) => {
+  try {
+    if (!keyboardHook) {
+      keyboardHook = createKeyboardHook(win, showFieldWindow)
+    }
+    
+    keyboardHook.setPasteEnabled(enabled)
+    return { success: true, message: enabled ? 'Paste enabled' : 'Paste disabled' }
+  } catch (error) {
+    console.error('Error toggling paste:', error)
+    return { success: false, message: 'Failed to toggle paste' }
   }
 })
 

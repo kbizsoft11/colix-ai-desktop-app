@@ -13,6 +13,7 @@ interface ShortcutFormProps {
 }
 
 const emptyForm: ShortcutInput = { name: '', label: '', content: '' }
+const shortcutDisplayName = (shortcut: Shortcut) => shortcut.label.trim() || shortcut.name
 const dateFormatGroups = [
   { label: 'Date', formats: ['YYYY-MM-DD', 'MM/DD/YYYY', 'DD/MM/YYYY', 'DD-MM-YYYY', 'MM.DD.YYYY', 'MMM D, YYYY', 'D MMM YYYY', 'dddd, MMMM D, YYYY'] },
   { label: 'Time', formats: ['HH:mm', 'HH:mm:ss', 'hh:mm a', 'hh:mm:ss a'] },
@@ -79,7 +80,7 @@ export default function ShortcutForm({ onSubmit, onCancel, initialData, isEditin
   const escapeAttribute = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   const importSnippet = (shortcut: Shortcut) => {
-    setInsertHtmlRequest({ html: `<span class="dynamic-snippet" contenteditable="false" data-snippet-trigger="${escapeAttribute(shortcut.name)}">${escapeAttribute(shortcut.label)}</span>&nbsp;`, id: Date.now() })
+    setInsertHtmlRequest({ html: `<span class="dynamic-snippet" contenteditable="false" data-snippet-trigger="${escapeAttribute(shortcut.name)}">${escapeAttribute(shortcutDisplayName(shortcut))}</span>&nbsp;`, id: Date.now() })
     setShowImport(false)
     setImportSearch('')
   }
@@ -207,9 +208,8 @@ export default function ShortcutForm({ onSubmit, onCancel, initialData, isEditin
     const nextErrors: Record<string, string> = {}
     const trigger = formData.name.trim()
     if (!trigger) nextErrors.name = 'Shortcut trigger is required'
-    else if (!trigger.startsWith('-') && !trigger.startsWith('@')) nextErrors.name = 'Use - or @ at the start'
-    else if (trigger.length < 2) nextErrors.name = 'Add at least one character after the prefix'
-    if (!formData.label.trim()) nextErrors.label = 'Label is required'
+    // Triggers are intentionally unrestricted so users can choose their own convention.
+    // if (!formData.label.trim()) nextErrors.label = 'Label is required'
     if (!richTextToPlainText(formData.content)) nextErrors.content = 'Content is required'
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length === 0) onSubmit({ ...formData, name: trigger })
@@ -225,8 +225,9 @@ export default function ShortcutForm({ onSubmit, onCancel, initialData, isEditin
         </div>
       </div>
       <div className="form-fields">
+        <div className="shortcut-info" role="note"><strong>Shortcut tips</strong><span>Start shortcuts with special characters like <code>-</code>, <code>@</code>, or <code>/</code> to avoid conflicts with normal text.</span></div>
         <label>
-          <span>Label <em>(describes the shortcut)</em></span>
+          <span>Label <em>(optional)</em></span>
           <input value={formData.label} onChange={event => handleChange('label', event.target.value)} placeholder="e.g. Thank you message" />
           {errors.label && <small className="field-error">{errors.label}</small>}
         </label>
@@ -310,7 +311,7 @@ export default function ShortcutForm({ onSubmit, onCancel, initialData, isEditin
         <section className="date-dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title" onMouseDown={event => event.stopPropagation()}>
           <div className="date-dialog-header"><div><h2 id="import-dialog-title">Import snippet</h2><p>Select an existing shortcut to insert its content here.</p></div><button type="button" className="date-dialog-close" onClick={() => setShowImport(false)} aria-label="Close">×</button></div>
           <input className="import-search" autoFocus value={importSearch} onChange={event => setImportSearch(event.target.value)} placeholder="Search snippets..." />
-          <div className="import-list">{importableShortcuts.map(shortcut => <button type="button" className="import-item" key={shortcut.id} onClick={() => importSnippet(shortcut)}><code>{shortcut.name}</code><span><strong>{shortcut.label}</strong><small>{richTextToPlainText(shortcut.content)}</small></span></button>)}{!importableShortcuts.length && <p className="import-empty">No snippets found.</p>}</div>
+          <div className="import-list">{importableShortcuts.map(shortcut => <button type="button" className="import-item" key={shortcut.id} onClick={() => importSnippet(shortcut)}><code>{shortcut.name}</code><span><strong>{shortcutDisplayName(shortcut)}</strong><small>{richTextToPlainText(shortcut.content)}</small></span></button>)}{!importableShortcuts.length && <p className="import-empty">No snippets found.</p>}</div>
           <div className="date-dialog-actions"><button type="button" className="button button-light" onClick={() => setShowImport(false)}>Cancel</button></div>
         </section>
       </div>}
