@@ -10,38 +10,22 @@ import { storageManager } from './utils/storageManager'
 import { Shortcut, ShortcutFolder, ShortcutInput } from './types/shortcut'
 import logo from "./assets/logo.png"
 import { richTextToPlainText } from './utils/richText'
-
-import supportReply from "./assets/marketplace/support-reply.png"
-import costEstimate from "./assets/marketplace/cost-estimate.png"
-import jobApplication from "./assets/marketplace/job-application.png"
-import meetingNotes from "./assets/marketplace/meeting-notes.png"
-import projectHandover from "./assets/marketplace/project-handover.png"
-import medicalForm from "./assets/marketplace/medical-form.png"
+import supportReply from "./assets/marketplace/support-reply.png";
+import costEstimate from "./assets/marketplace/cost-estimate.png";
+import jobApplication from "./assets/marketplace/job-application.png";
+import meetingNotes from "./assets/marketplace/meeting-notes.png";
+import projectHandover from "./assets/marketplace/project-handover.png";
+import medicalForm from "./assets/marketplace/medical-form.png";
+import { groupService, type Group } from "./services/groupService";
+import Icon, { type IconName } from './components/Icon'
+import Header from './components/Header'
+import { useHashRoute } from './router/useHashRoute'
+import { workspaceService, type WorkspaceInvitation, type WorkspaceMember } from './services/workspaceService'
 
 const shortcutDisplayName = (shortcut: Shortcut) => shortcut.label.trim() || shortcut.name
 
-type IconName = 'plus' | 'folder' | 'bolt' | 'search' | 'user' | 'edit' | 'trash' | 'copy' | 'back' | 'grid' | 'book' | 'chevron' | 'logout'
-
-function Icon({ name, size = 17 }: { name: IconName; size?: number }) {
-  const paths: Record<IconName, string[]> = {
-    plus: ['M12 5v14M5 12h14'],
-    folder: ['M3 7.5A2.5 2.5 0 015.5 5H10l2 2h6.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5z'],
-    bolt: ['m13 2-9 11h7l-1 9 9-12h-7z'],
-    search: ['m21 21-4.35-4.35', 'M11 18a7 7 0 110-14 7 7 0 010 14z'],
-    user: ['M20 21a8 8 0 00-16 0', 'M12 13a4 4 0 100-8 4 4 0 000 8z'],
-    edit: ['m4 16.5-.8 3.3 3.3-.8L18 7.5 15.5 5z', 'm14.5 6 2.5 2.5'],
-    trash: ['M4 7h16', 'M10 11v6M14 11v6', 'M9 7V4h6v3', 'M6 7l1 14h10l1-14'],
-    copy: ['M8 8V5.5A2.5 2.5 0 0110.5 3h8A2.5 2.5 0 0121 5.5v8a2.5 2.5 0 01-2.5 2.5H16', 'M5.5 8h8A2.5 2.5 0 0116 10.5v8a2.5 2.5 0 01-2.5 2.5h-8A2.5 2.5 0 013 18.5v-8A2.5 2.5 0 015.5 8z'],
-    back: ['m15 18-6-6 6-6', 'M9 12h11'],
-    grid: ['M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'],
-    book: ['M4 5.5A2.5 2.5 0 016.5 3H20v16H6.5A2.5 2.5 0 004 16.5z', 'M4 16.5A2.5 2.5 0 016.5 14H20'],
-    chevron: ['m8 10 4 4 4-4'],
-    logout: ['M10 17l5-5-5-5', 'M15 12H3', 'M21 19V5a2 2 0 00-2-2h-5'],
-  }
-  return <svg className="ui-icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name].map((path, index) => <path key={index} d={path} />)}</svg>
-}
-
 function App() {
+  const { route, navigate } = useHashRoute()
   const [session, setSession] = useState<Session | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [profileUserId, setProfileUserId] = useState<string | null>(null)
@@ -49,7 +33,6 @@ function App() {
   const [folders, setFolders] = useState<ShortcutFolder[]>([])
   const [activeFolderId, setActiveFolderId] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [showEditor, setShowEditor] = useState(false)
   const [editingData, setEditingData] = useState<ShortcutInput | undefined>()
   const [searchQuery, setSearchQuery] = useState('')
   const [testText, setTestText] = useState('')
@@ -59,9 +42,12 @@ function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; shortcut: Shortcut } | null>(null)
   const [folderDialog, setFolderDialog] = useState<{ mode: 'create' | 'rename'; folderId?: string; name: string } | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void | Promise<void> } | null>(null)
-  const [showProfile, setShowProfile] = useState(false)
-  const [showMarketplace, setShowMarketplace] = useState(false)
   const [isPasteEnabled, setIsPasteEnabled] = useState(true)
+  // Groups state
+  const [groups, setGroups] = useState<Group[]>([])
+  const [groupsLoading, setGroupsLoading] = useState(false)
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [groupDialog, setGroupDialog] = useState<{ mode: 'create' | 'edit'; groupId?: string; name: string; description: string } | null>(null)
 
   useEffect(() => {
     if (!supabase) {
@@ -125,6 +111,39 @@ function App() {
     }
   }, [])
 
+  // Load groups when Groups view is shown
+  useEffect(() => {
+    if (route !== '/groups') return
+    const workspaceId = 'be0df420-f9f7-4ad2-a716-48ea4355175e'
+    void (async () => {
+      try {
+        setGroupsLoading(true)
+        const data = await groupService.getAll(workspaceId)
+        setGroups(data)
+        setSelectedGroupId(current => current && data.some(group => group.id === current) ? current : data[0]?.id || null)
+      } catch (e) {
+        console.error('Failed to load groups', e)
+        notify && notify('Unable to load groups')
+      } finally {
+        setGroupsLoading(false)
+      }
+    })()
+  }, [route])
+
+  useEffect(() => {
+    if (route === '/shortcut/new') {
+      setEditingId(null)
+      setEditingData(undefined)
+      return
+    }
+    if (!route.startsWith('/shortcut/')) return
+    const shortcut = shortcuts.find(item => item.id === route.slice('/shortcut/'.length))
+    if (shortcut) {
+      setEditingId(shortcut.id)
+      setEditingData({ name: shortcut.name, label: shortcut.label, content: shortcut.content })
+    }
+  }, [route, shortcuts])
+
   const startKeyboardHook = async (items: Shortcut[]) => {
     const result = await ipcService.startKeyboardHook(items)
     if (result.success) setIsHookActive(true)
@@ -140,17 +159,17 @@ function App() {
   const openCreate = () => {
     setEditingId(null)
     setEditingData(undefined)
-    setShowEditor(true)
+    navigate('/shortcut/new')
   }
 
   const openEdit = (shortcut: Shortcut) => {
     setEditingId(shortcut.id)
     setEditingData({ name: shortcut.name, label: shortcut.label, content: shortcut.content })
-    setShowEditor(true)
+    navigate(`/shortcut/${shortcut.id}`)
   }
 
   const finishEditor = () => {
-    setShowEditor(false)
+    navigate('/')
     setEditingId(null)
     setEditingData(undefined)
   }
@@ -307,10 +326,10 @@ function App() {
 
   if (!session) return <LoginScreen />
 
-  if (showMarketplace) {
+  if (route === '/marketplace') {
     return <div className="app-shell">
-      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => setShowMarketplace(false)} onProfile={() => setShowProfile(true)} onMarketplace={() => setShowMarketplace(true)} />
-      <MarketplaceView onBack={() => setShowMarketplace(false)} shortcuts={shortcuts} folders={folders} onSetFolders={setFolders} onAddTemplate={async (data, folderId) => {
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
+      <MarketplaceView onBack={() => navigate('/')} shortcuts={shortcuts} folders={folders} onSetFolders={setFolders} onAddTemplate={async (data, folderId) => {
         if (!supabase || !session || !profileUserId) return
         try {
           const created = await shortcutService.create(supabase, profileUserId, session.user.email, data, folderId || activeFolderId || folders[0]?.id)
@@ -327,18 +346,75 @@ function App() {
     </div>
   }
 
-  if (showProfile) {
+  if (route === '/profile') {
     return <div className="app-shell">
-      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => setShowProfile(false)} onProfile={() => setShowProfile(true)} onMarketplace={() => setShowMarketplace(true)} />
-      <ProfileView session={session} onBack={() => setShowProfile(false)} onSaved={updatedSession => setSession(updatedSession)} notify={notify} />
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
+      <ProfileView session={session} onBack={() => navigate('/')} onSaved={updatedSession => setSession(updatedSession)} notify={notify} />
       {notification && <div className="toast">{notification}</div>}
     </div>
   }
 
-  if (showEditor) {
+  if (route === '/teams') {
+    return <div className="app-shell">
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
+      <TeamsView onBack={() => navigate('/')} />
+      {notification && <div className="toast">{notification}</div>}
+    </div>
+  }
+
+  if (route === '/workspace') {
+    return <div className="app-shell">
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
+      <WorkspaceView email={session.user.email || 'abhishekkumarphp.kbizsoft@gmail.com'} onBack={() => navigate('/')} />
+      {notification && <div className="toast">{notification}</div>}
+    </div>
+  }
+
+  if (route === '/groups') {
     return (
       <div className="app-shell">
-        <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={finishEditor} onProfile={() => setShowProfile(true)} onMarketplace={() => setShowMarketplace(true)} />
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
+        <GroupsView
+          onBack={() => navigate('/')}
+          groups={groups}
+          groupsLoading={groupsLoading}
+          selectedGroupId={selectedGroupId}
+          onSelectGroup={setSelectedGroupId}
+          openCreateGroup={() => setGroupDialog({ mode: 'create', name: '', description: '' })}
+          openEditGroup={group => setGroupDialog({ mode: 'edit', groupId: group.id, name: group.name, description: group.description })}
+          onDeleteGroup={async group => {
+            if (!window.confirm(`Delete the ${group.name} group?`)) return
+            try {
+              await groupService.remove('be0df420-f9f7-4ad2-a716-48ea435517e5', group.id)
+              const refreshed = await groupService.getAll('be0df420-f9f7-4ad2-a716-48ea435517e5')
+              setGroups(refreshed)
+              setSelectedGroupId(refreshed[0]?.id || null)
+              notify('Group deleted')
+            } catch (error) {
+              console.error('Error deleting group', error)
+              notify('Unable to delete group')
+            }
+          }}
+        />
+        <GroupDialog
+          dialog={groupDialog}
+          setDialog={setGroupDialog}
+          onCreated={async () => {
+            const refreshed = await groupService.getAll('be0df420-f9f7-4ad2-a716-48ea4355175e')
+            setGroups(refreshed)
+            setSelectedGroupId(current => current || refreshed[0]?.id || null)
+            notify('Group created')
+          }}
+        />
+        {notification && <div className="toast">{notification}</div>}
+      </div>
+    );
+  }
+
+  if (route === '/shortcut/new' || route.startsWith('/shortcut/')) {
+    return (
+      <div className="app-shell">
+        <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={finishEditor} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
         <div className="workspace editor-workspace">
           <Sidebar folders={folders} shortcuts={shortcuts} activeFolderId={activeFolderId} setActiveFolderId={setActiveFolderId} onCreateFolder={createFolder} onRenameFolder={renameFolder} onDeleteFolder={deleteFolder} onCreateShortcut={openCreate} onEdit={openEdit} onDragStart={setDraggedShortcutId} onDrop={moveShortcut} onContextMenu={showShortcutContextMenu} />
           <main className="editor-main"><ShortcutForm key={editingId || 'new'} isEditing={Boolean(editingId)} initialData={editingData} availableShortcuts={shortcuts} currentShortcutId={editingId} onSubmit={handleSave} onCancel={finishEditor} /></main>
@@ -353,22 +429,32 @@ function App() {
 
   return (
     <div className="app-shell">
-      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => undefined} onProfile={() => setShowProfile(true)} onMarketplace={() => setShowMarketplace(true)} />
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
       <div className="workspace">
         <Sidebar folders={folders} shortcuts={shortcuts} activeFolderId={activeFolderId} setActiveFolderId={setActiveFolderId} onCreateFolder={createFolder} onRenameFolder={renameFolder} onDeleteFolder={deleteFolder} onCreateShortcut={openCreate} onEdit={openEdit} onDragStart={setDraggedShortcutId} onDrop={moveShortcut} onContextMenu={showShortcutContextMenu} />
         <main className="dashboard-main">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            marginBottom: '24px',
+            backgroundColor: '#ffffff',
+            borderRadius: '12px',
+            padding: '16px 20px',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.06)',
+            border: '1px solid rgba(0,0,0,0.06)',
+          }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <label style={{ fontWeight: 500, color: '#142033', fontSize: '14px' }}>Paste Functionality</label>
+              <label style={{ fontWeight: 500, color: '#142033', fontSize: '14px' }}>Active</label>
               <button
                 onClick={() => {
                   setIsPasteEnabled(!isPasteEnabled)
                   void ipcService.togglePaste(!isPasteEnabled)
                 }}
                 style={{
-                  width: '48px',
-                  height: '28px',
-                  borderRadius: '14px',
+                  width: '60px',
+                  height: '34px',
+                  borderRadius: '17px',
                   border: 'none',
                   cursor: 'pointer',
                   backgroundColor: isPasteEnabled ? '#10b981' : '#d1d5db',
@@ -379,11 +465,11 @@ function App() {
                 <div
                   style={{
                     position: 'absolute',
-                    top: '2px',
-                    left: isPasteEnabled ? '26px' : '2px',
-                    width: '24px',
-                    height: '24px',
-                    borderRadius: '12px',
+                    top: '3px',
+                    left: isPasteEnabled ? '29px' : '3px',
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '14px',
                     backgroundColor: 'white',
                     transition: 'left 0.2s',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
@@ -416,38 +502,6 @@ function App() {
       {confirmDialog && <ConfirmDialog dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />}
     </div>
   )
-}
-
-function Header({ searchQuery, setSearchQuery, email, onLogout, onHome, onProfile, onMarketplace }: { searchQuery: string; setSearchQuery: (value: string) => void; email: string | undefined; onLogout: () => void | Promise<void>; onHome: () => void; onProfile: () => void; onMarketplace: () => void }) {
-  const initial = email?.trim().charAt(0).toUpperCase() || 'U'
-  return <header className="top-header">
-    <button className="brand-mark" onClick={onHome} aria-label="Go to shortcuts home">
-      <div className="flex justify-center items-center gap-3">
-        <img className="w-12 h-12 rounded-full" src={logo} alt="ColixAI" />
-       <span className="tracking-wide leading-0 text-white">ColixAI</span>
-      </div>
-    </button>
-    <div className='flex justify-center items-center'>
-      <button onClick={onMarketplace} className='text-white hover:opacity-78 bg-transparent border-0 cursor-pointer'>Marketplace</button>
-    </div>
-    <div className="header-actions">
-      <div className="header-search">
-        <Icon name="search" size={16} />
-        <input value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search shortcuts..." />
-      </div>
-      <div className="profile-menu-wrap">
-        <button className="profile-icon" aria-label="Open profile menu">{initial}</button>
-        <div className="profile-menu">
-          <div className="profile-menu-email">{email || 'Signed-in user'}</div>
-          <button className="profile-menu-link" onClick={onProfile}>
-            <Icon name="user" size={15} /> Profile
-          </button>
-          <button onClick={() => void onLogout()}>
-            <Icon name="logout" size={15} /> Logout</button>
-        </div>
-      </div>
-    </div>
-  </header>
 }
 
 function ProfileView({ session, onBack, onSaved, notify }: { session: Session; onBack: () => void; onSaved: (session: Session) => void; notify: (message: string) => void }) {
@@ -495,6 +549,284 @@ function ProfileView({ session, onBack, onSaved, notify }: { session: Session; o
         {error && <p className="profile-error" role="alert">{error}</p>}
         <div className="profile-actions"><button type="button" className="button button-light" onClick={onBack}>Cancel</button><button type="submit" className="button button-primary" disabled={isSaving}>{isSaving ? 'Saving...' : 'Save changes'}</button></div>
       </form>
+    </section>
+  </main>
+}
+
+function GroupsView({ onBack, groups, groupsLoading, selectedGroupId, onSelectGroup, openCreateGroup, openEditGroup, onDeleteGroup }: { onBack: () => void; groups: Group[]; groupsLoading: boolean; selectedGroupId: string | null; onSelectGroup: (id: string) => void; openCreateGroup: () => void; openEditGroup: (group: Group) => void; onDeleteGroup: (group: Group) => void | Promise<void> }) {
+  const selectedGroup = groups.find(group => group.id === selectedGroupId) || groups[0]
+
+  return (
+    <main className="groups-main">
+      <section className="groups-container">
+        <div className="groups-header">
+          <div>
+            <h2 className="groups-header-label">WORKSPACE GROUPS</h2>
+            <h1 className="groups-title">Organize access by team.</h1>
+            <p className="groups-subtitle">Create focused groups for HR, IT, Sales, and the people behind each one.</p>
+          </div>
+          <div className="groups-workspace-selector">
+            <label className="groups-workspace-label">Workspace</label>
+            <select className="groups-workspace-dropdown">
+              <option>Workspace</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="groups-content">
+          {/* Left Panel - Groups List */}
+          <div className="groups-left-panel">
+            <div className="groups-list-header">
+              <h3 className="groups-list-title">Your groups</h3>
+              <p className="groups-count">{groups.length} {groups.length === 1 ? 'group' : 'groups'}</p>
+              <button className="groups-new-button" onClick={openCreateGroup}>+ New</button>
+            </div>
+            {groupsLoading ? (
+              <div className="groups-skeleton-list" aria-label="Loading groups"><div className="group-skeleton group-skeleton-selected" /><div className="group-skeleton" /><div className="group-skeleton" /></div>
+            ) : groups.length === 0 ? (
+              <div className="groups-empty-state">
+                <p className="groups-empty-title">No groups yet</p>
+                <p className="groups-empty-message">Create your first group to start organizing access.</p>
+              </div>
+            ) : (
+              <ul className="groups-list">
+                {groups.map(g => (
+                  <li key={g.id} className={`group-item ${selectedGroup?.id === g.id ? 'group-item-selected' : ''}`} onClick={() => onSelectGroup(g.id)}>
+                    <h4 className="group-name">{g.name}</h4>
+                    <p className="group-description">{g.description}</p>
+                    <span className="group-members-count">{g.members?.length || 0} members</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Right Panel - Group Details */}
+          <div className="groups-right-panel">
+            {groupsLoading ? <div className="group-detail-skeleton" aria-label="Loading group details"><div className="skeleton-line skeleton-title" /><div className="skeleton-line skeleton-subtitle" /><div className="skeleton-tabs" /><div className="skeleton-line skeleton-members" /></div> : selectedGroup ? <>
+              <div className="group-detail-header">
+                <div><h2>{selectedGroup.name}</h2><p>{selectedGroup.description}</p></div>
+                <div className="group-detail-actions"><button className="group-action-button" onClick={() => openEditGroup(selectedGroup)}>Edit group</button><button className="group-action-button">Add member</button><button className="group-action-button group-delete-button" onClick={() => void onDeleteGroup(selectedGroup)}>Delete group</button></div>
+              </div>
+              <div className="group-tabs"><button className="group-tab group-tab-active">Members</button><button className="group-tab">Shared folders</button></div>
+              <div className="group-members-panel"><p className="group-members-heading">{selectedGroup.members?.length || 0} MEMBERS</p><div className="group-members-empty">No members assigned yet.</div></div>
+            </> : <div className="groups-detail-empty"><p className="groups-detail-title">Select a group to view details</p></div>}
+          </div>
+        </div>
+
+        <button className="groups-back-button" onClick={onBack}>
+          <Icon name="back" size={15} /> Back
+        </button>
+      </section>
+    </main>
+  )
+}
+
+function WorkspaceView({ email, onBack }: { email: string; onBack: () => void }) {
+  const [workspaceName, setWorkspaceName] = useState("abhishekkumarphp.kbizsoft's Workspace")
+  const [nameDialog, setNameDialog] = useState<string | null>(null)
+  const [isSavingName, setIsSavingName] = useState(false)
+  const [nameError, setNameError] = useState('')
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<'members' | 'invitations'>('members')
+  const [members, setMembers] = useState<WorkspaceMember[]>([])
+  const [invitations, setInvitations] = useState<WorkspaceInvitation[]>([])
+  const [workspaceLoading, setWorkspaceLoading] = useState(true)
+  const [workspaceError, setWorkspaceError] = useState('')
+  const [inviteDialog, setInviteDialog] = useState<{ email: string; role: 'viewer' | 'editor' | 'admin' } | null>(null)
+  const [inviteError, setInviteError] = useState('')
+  const [isSendingInvite, setIsSendingInvite] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const loadWorkspaceTab = async () => {
+      try {
+        setWorkspaceLoading(true)
+        setWorkspaceError('')
+        const result = activeWorkspaceTab === 'members' ? await workspaceService.getMembers() : await workspaceService.getInvitations()
+        if (cancelled) return
+        if (activeWorkspaceTab === 'members') setMembers(result.items as WorkspaceMember[])
+        else setInvitations(result.items as WorkspaceInvitation[])
+      } catch (error) {
+        if (!cancelled) setWorkspaceError(error instanceof Error ? error.message : 'Unable to load workspace records')
+      } finally {
+        if (!cancelled) setWorkspaceLoading(false)
+      }
+    }
+    void loadWorkspaceTab()
+    return () => { cancelled = true }
+  }, [activeWorkspaceTab])
+
+  const inviteLimitReached = members.length >= 2 || invitations.length >= 1
+
+  const sendInvite = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!inviteDialog || inviteLimitReached) return
+    try {
+      setIsSendingInvite(true)
+      setInviteError('')
+      await workspaceService.sendInvitation(inviteDialog.email.trim(), inviteDialog.role)
+      const refreshedInvitations = await workspaceService.getInvitations()
+      setInvitations(refreshedInvitations.items)
+      setInviteDialog(null)
+      setActiveWorkspaceTab('invitations')
+    } catch (error) {
+      setInviteError(error instanceof Error ? error.message : 'Unable to send invitation')
+    } finally {
+      setIsSendingInvite(false)
+    }
+  }
+
+  const saveWorkspaceName = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const name = nameDialog?.trim()
+    if (!name) return
+    try {
+      setIsSavingName(true)
+      setNameError('')
+      setWorkspaceName(await workspaceService.updateName(name))
+      setNameDialog(null)
+    } catch (error) {
+      setNameError(error instanceof Error ? error.message : 'Unable to update workspace name')
+    } finally {
+      setIsSavingName(false)
+    }
+  }
+
+  return <main className="workspace-page-main">
+    <section className="workspace-page-container">
+      <div className="workspace-page-heading"><div><p className="workspace-page-label">WORKSPACE</p><h1>Members and<br />access</h1><p>Invite people to collaborate on shared snippets, forms, and folders.</p></div><div className="workspace-page-actions"><label>Workspace<select><option>{workspaceName}</option></select></label><button className="workspace-invite-button" disabled={inviteLimitReached} onClick={() => { setInviteError(''); setInviteDialog({ email: '', role: 'viewer' }) }}>+ <span>Invite user</span></button></div></div>
+      <section className="workspace-summary-card"><div className="workspace-summary-top"><div><h2>{workspaceName} <button type="button" className="workspace-edit-mark" onClick={() => setNameDialog(workspaceName)} aria-label="Edit workspace name"><Icon name="edit" size={12} /></button></h2><p>{email} · owner</p><strong>Free plan · {Math.min(2, members.length + 1)} of 2 seats used</strong></div><span className="workspace-personal-badge">Personal workspace</span></div><div className="workspace-tabs"><button className={activeWorkspaceTab === 'members' ? 'workspace-tab-active' : ''} onClick={() => setActiveWorkspaceTab('members')}>Members</button><button className={activeWorkspaceTab === 'invitations' ? 'workspace-tab-active' : ''} onClick={() => setActiveWorkspaceTab('invitations')}>Pending invitations</button><button>Shared resources</button></div></section>
+      <section className="members-table-card"><div className="members-table-heading"><label>Search<input placeholder="Search this view..." /></label><label>Role<select><option>All roles</option></select></label><label>Status<select><option>All statuses</option></select></label><label>Type<select><option>All resources</option></select></label><button>Clear</button></div><h2>{activeWorkspaceTab === 'members' ? 'Members' : 'Pending invitations'}</h2><p className="members-result-count">{workspaceLoading ? 'Loading...' : `${activeWorkspaceTab === 'members' ? members.length : invitations.length} result${(activeWorkspaceTab === 'members' ? members.length : invitations.length) === 1 ? '' : 's'}`}</p>{workspaceError ? <p className="workspace-data-error">{workspaceError}</p> : <table><thead><tr><th>MEMBER</th><th>ROLE</th><th>STATUS</th><th>{activeWorkspaceTab === 'members' ? 'JOINED' : 'SENT'}</th></tr></thead><tbody>{activeWorkspaceTab === 'members' ? members.map(member => { const memberEmail = member.user?.email || member.email || 'Unknown member'; const memberName = [member.user?.first_name, member.user?.last_name].filter(Boolean).join(' ') || memberEmail; return <tr key={member.user_id || member.user?.id || memberEmail}><td><strong>{memberName}</strong><small>{memberEmail}</small></td><td>{member.role || 'member'}</td><td><span className="member-active-badge">{member.status || 'Active'}</span></td><td>{member.created_at || member.joined_at || member.joined || '—'}</td></tr> }) : invitations.map(invitation => <tr key={invitation.id || invitation.email}><td><strong>{invitation.email}</strong></td><td>{invitation.role || 'viewer'}</td><td><span className="member-active-badge">{invitation.status || 'Pending'}</span></td><td>{invitation.created_at || invitation.sent_at || '—'}</td></tr>)}</tbody></table>}<div className="members-pagination"><button disabled>← Previous</button><span>Page 1 of 1</span><button disabled>Next →</button></div></section>
+      <button className="groups-back-button" onClick={onBack}><Icon name="back" size={15} /> Back</button>
+      {nameDialog !== null && <div className="dialog-backdrop" onMouseDown={() => setNameDialog(null)}><form className="workspace-name-dialog" onSubmit={saveWorkspaceName} onMouseDown={event => event.stopPropagation()}><button type="button" className="workspace-dialog-close" onClick={() => setNameDialog(null)} aria-label="Close">×</button><p className="workspace-page-label">WORKSPACE</p><h2>Edit workspace name</h2><p>Choose a name for your workspace.</p><input autoFocus value={nameDialog} onChange={event => setNameDialog(event.target.value)} placeholder="Workspace name" />{nameError && <p className="workspace-name-error" role="alert">{nameError}</p>}<div className="dialog-actions"><button type="button" className="button button-light" onClick={() => setNameDialog(null)}>Cancel</button><button type="submit" className="button button-primary" disabled={isSavingName}>{isSavingName ? 'Saving...' : 'Save changes'}</button></div></form></div>}
+      {inviteDialog && <div className="dialog-backdrop" onMouseDown={() => setInviteDialog(null)}><form className="workspace-name-dialog invite-dialog" onSubmit={sendInvite} onMouseDown={event => event.stopPropagation()}><button type="button" className="workspace-dialog-close" onClick={() => setInviteDialog(null)} aria-label="Close">×</button><p className="workspace-page-label">WORKSPACE</p><h2>Invite a member</h2><p>Send an invitation to collaborate in this workspace.</p><label className="invite-field-label">Email<input autoFocus type="email" required value={inviteDialog.email} onChange={event => setInviteDialog({ ...inviteDialog, email: event.target.value })} placeholder="person@example.com" /></label><label className="invite-field-label">Role<select value={inviteDialog.role} onChange={event => setInviteDialog({ ...inviteDialog, role: event.target.value as 'viewer' | 'editor' | 'admin' })}><option value="viewer">Viewer</option><option value="editor">Editor</option><option value="admin">Admin</option></select></label>{inviteError && <p className="workspace-name-error" role="alert">{inviteError}</p>}<div className="dialog-actions"><button type="button" className="button button-light" onClick={() => setInviteDialog(null)}>Cancel</button><button type="submit" className="button button-primary" disabled={isSendingInvite}>{isSendingInvite ? 'Sending...' : 'Send invitation'}</button></div></form></div>}
+    </section>
+  </main>
+}
+
+interface TeamPlan {
+  plan_code: string
+  name: string
+  max_members: number
+  monthly_price: number
+}
+
+function TeamsView({ onBack }: { onBack: () => void }) {
+  const [plans, setPlans] = useState<TeamPlan[]>([])
+  const [plansLoading, setPlansLoading] = useState(true)
+  const [plansError, setPlansError] = useState('')
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const loadPlans = async () => {
+      try {
+        setPlansLoading(true)
+        setPlansError('')
+        const response = await fetch('https://extensions.kbizsoft.com/magicaa-extension/teams-plans.php', {
+          headers: { 'X-User-Email': 'abhishekkumarphp.kbizsoft@gmail.com' },
+          signal: controller.signal,
+        })
+        if (!response.ok) throw new Error(`Request failed (${response.status})`)
+        const result = await response.json() as { success?: boolean; plans?: TeamPlan[]; message?: string }
+        if (!result.success || !Array.isArray(result.plans)) throw new Error(result.message || 'Invalid plans response')
+        setPlans(result.plans)
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        console.error('Unable to load team plans', error)
+        setPlansError(error instanceof Error ? error.message : 'Unable to load team plans')
+      } finally {
+        if (!controller.signal.aborted) setPlansLoading(false)
+      }
+    }
+    void loadPlans()
+    return () => controller.abort()
+  }, [])
+
+  const formatPrice = (price: number) => price === 0 ? 'Free' : `$${price.toFixed(2)}`
+  const formatMemberLimit = (limit: number) => limit >= 2147483647 ? 'Unlimited members' : `Up to ${limit} member${limit === 1 ? '' : 's'}`
+  const orderedPlans = [...plans].sort((a, b) => Number(a.plan_code === 'custom') - Number(b.plan_code === 'custom'))
+  const openCheckout = (planCode: string) => {
+    const checkoutUrl = new URL('https://extensions.kbizsoft.com/magicaa-extension/paypal-checkout.html')
+    checkoutUrl.searchParams.set('workspace_id', '3894f28c-8f53-4624-8132-7ec4320c5a0b')
+    checkoutUrl.searchParams.set('plan_code', planCode)
+    checkoutUrl.searchParams.set('user_email', 'abhishekkumarphp.kbizsoft@gmail.com')
+    void ipcService.openExternalUrl(checkoutUrl.toString())
+  }
+
+  return <main className="teams-main">
+    <section className="teams-container">
+      <div className="teams-header">
+        <div>
+          <h1 className="teams-title">Space to grow, together</h1>
+          <p className="teams-subtitle">Bring your snippets, forms, and folders together in one shared workspace</p>
+        </div>
+        <div className="teams-icon">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3" />
+          </svg>
+        </div>
+      </div>
+
+      {/* Workspace Subscription */}
+      <div className="teams-section">
+        <h2 className="teams-section-label">WORKSPACE SUBSCRIPTION</h2>
+        <div className="workspace-card">
+          <div className="workspace-content">
+            <h3>abhishekkumarphp.kbizsoft's Workspace</h3>
+            <p className="workspace-plan">Free plan · Admin</p>
+          </div>
+          <div className="workspace-selector">
+            <select className="workspace-dropdown">
+              <option>Workspace</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Plans Section */}
+      <div className="teams-section plans-section">
+        <div className="plans-header">
+          <div><h2 className="teams-section-label">PLANS</h2><h3 className="plans-title">Choose the room your team needs</h3></div>
+          <span className="access-badge">30-day access</span>
+        </div>
+
+        {plansLoading && <div className="plans-message">Loading plans...</div>}
+        {!plansLoading && plansError && <div className="plans-message plans-error">Unable to load plans: {plansError}</div>}
+        {!plansLoading && !plansError && <div className="plans-grid">
+          {orderedPlans.map(plan => {
+            const isFree = plan.plan_code === 'free'
+            const isCustom = plan.plan_code === 'custom'
+            return <div className={`plan-card ${isFree ? 'free-active' : ''}`} key={plan.plan_code}>
+              {isFree && <div className="plan-badge">Current plan</div>}
+              <h4 className="plan-name">{plan.name}</h4>
+              <div className="plan-price">{formatPrice(plan.monthly_price)}{plan.monthly_price > 0 && <span className="plan-period">/month</span>}</div>
+              <p className="plan-members">{formatMemberLimit(plan.max_members)}</p>
+              {isFree && <div className="plan-status">Active</div>}
+              <button className={`plan-button ${isFree ? 'current' : isCustom ? 'contact' : 'upgrade'}`} disabled={isFree} onClick={() => { if (!isFree && !isCustom) openCheckout(plan.plan_code) }}>{isFree ? 'Current plan' : isCustom ? 'Contact us' : 'Upgrade for 30 days'}</button>
+            </div>
+          })}
+        </div>}
+      </div>
+
+      {/* Need Help Section */}
+      <div className="teams-help-section">
+        <div className="help-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+        </div>
+        <div className="help-content">
+          <h3>Need a tailored setup?</h3>
+          <p>Custom member limits and workspace arrangements are available for growing teams</p>
+        </div>
+        <button className="help-contact-button">Contact us</button>
+      </div>
+
+      <button className="teams-back-button" onClick={onBack}>
+        <Icon name="back" size={15} /> Back
+      </button>
     </section>
   </main>
 }
@@ -604,17 +936,50 @@ function DocsPanel() {
 }
 
 function FolderDialog({ dialog, setDialog, onSave }: { dialog: { mode: 'create' | 'rename'; folderId?: string; name: string }; setDialog: (dialog: { mode: 'create' | 'rename'; folderId?: string; name: string } | null) => void; onSave: () => void }) {
-  return <div className="dialog-backdrop" onMouseDown={() => setDialog(null)}>
-    <form className="folder-dialog" onSubmit={event => { event.preventDefault(); onSave() }} onMouseDown={event => event.stopPropagation()}>
-      <h2>{dialog.mode === 'create' ? 'Create folder' : 'Rename folder'}</h2>
-      <p>{dialog.mode === 'create' ? 'Organize your shortcuts into a new folder.' : 'Choose a new name for this folder.'}</p>
-      <input autoFocus value={dialog.name} onChange={event => setDialog({ ...dialog, name: event.target.value })} placeholder="Folder name" />
-      <div className="dialog-actions">
-        <button type="button" className="button button-light" onClick={() => setDialog(null)}>Cancel</button>
-        <button type="submit" className="button button-primary">{dialog.mode === 'create' ? 'Create folder' : 'Save name'}</button>
-      </div>
-    </form>
-  </div>
+  return (
+    <div className="dialog-backdrop" onMouseDown={() => setDialog(null)}>
+      <form className="folder-dialog" onSubmit={event => { event.preventDefault(); onSave() }} onMouseDown={event => event.stopPropagation()}>
+        <h2>{dialog.mode === 'create' ? 'Create folder' : 'Rename folder'}</h2>
+        <p>{dialog.mode === 'create' ? 'Organize your shortcuts into a new folder.' : 'Choose a new name for this folder.'}</p>
+        <input autoFocus value={dialog.name} onChange={event => setDialog({ ...dialog, name: event.target.value })} placeholder="Folder name" />
+        <div className="dialog-actions">
+          <button type="button" className="button button-light" onClick={() => setDialog(null)}>Cancel</button>
+          <button type="submit" className="button button-primary">{dialog.mode === 'create' ? 'Create folder' : 'Save name'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// Group creation dialog
+function GroupDialog({ dialog, setDialog, onCreated }: { dialog: { mode: 'create' | 'edit'; groupId?: string; name: string; description: string } | null; setDialog: (d: { mode: 'create' | 'edit'; groupId?: string; name: string; description: string } | null) => void; onCreated: () => void | Promise<void> }) {
+  const handleSubmit = async () => {
+    if (!dialog) return
+    const workspaceId = 'be0df420-f9f7-4ad2-a716-48ea4355175e'
+    try {
+      if (dialog.mode === 'edit' && dialog.groupId) await groupService.update(workspaceId, dialog.groupId, dialog.name.trim(), dialog.description.trim())
+      else await groupService.create(workspaceId, dialog.name.trim(), dialog.description.trim())
+      setDialog(null)
+      await onCreated()
+    } catch (e) {
+      console.error('Error creating group', e)
+    }
+  }
+  if (!dialog) return null
+  return (
+    <div className="dialog-backdrop" onMouseDown={() => setDialog(null)}>
+      <form className="group-dialog" onSubmit={event => { event.preventDefault(); handleSubmit() }} onMouseDown={event => event.stopPropagation()}>
+        <h2>{dialog.mode === 'edit' ? 'Edit group' : 'Create group'}</h2>
+        <p>{dialog.mode === 'edit' ? 'Update the name and description for this group.' : 'Enter the name and description for the new workspace group.'}</p>
+        <input autoFocus placeholder="Group name" value={dialog.name} onChange={e => setDialog({ ...dialog, name: e.target.value })} />
+        <textarea placeholder="Description" value={dialog.description} onChange={e => setDialog({ ...dialog, description: e.target.value })} />
+        <div className="dialog-actions">
+          <button type="button" className="button button-light" onClick={() => setDialog(null)}>Cancel</button>
+          <button type="submit" className="button button-primary">{dialog.mode === 'edit' ? 'Save changes' : 'Create'}</button>
+        </div>
+      </form>
+    </div>
+  )
 }
 
 function ConfirmDialog({ dialog, onClose }: { dialog: { title: string; message: string; confirmLabel: string; onConfirm: () => void | Promise<void> }; onClose: () => void }) {
@@ -720,7 +1085,7 @@ function MarketplaceView({ onBack, shortcuts, folders, onSetFolders, onAddTempla
 
   const handleCopyTemplate = async (template: MarketplaceTemplate) => {
     const alreadyOwns = shortcuts.some(s => s.name === template.trigger)
-    
+
     if (alreadyOwns) {
       notify('You already own this template')
       return
@@ -741,7 +1106,7 @@ function MarketplaceView({ onBack, shortcuts, folders, onSetFolders, onAddTempla
         label: template.label,
         content: template.content,
       }, importedFolder.id)
-      
+
       notify(`${template.label} added to Imported folder`)
       setTimeout(() => onBack(), 1500)
     } catch (error) {
@@ -777,7 +1142,7 @@ function MarketplaceView({ onBack, shortcuts, folders, onSetFolders, onAddTempla
               <div key={index} className="preview-line">{line}</div>
             ))}
           </div>
-          <button 
+          <button
             className="button button-primary marketplace-btn"
             onClick={() => handleCopyTemplate(template)}
           >

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Global keyboard listener for ColixAI shortcuts."""
 
 import json

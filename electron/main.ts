@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, screen, shell } from 'electron'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -162,6 +162,12 @@ app.on('before-quit', () => {
 })
 
 // ========== IPC Handlers ==========
+
+ipcMain.handle('open-external-url', async (_event, url: string) => {
+  if (!url.startsWith('https://')) throw new Error('Only HTTPS URLs can be opened externally')
+  await shell.openExternal(url)
+  return { success: true }
+})
 
 /**
  * Start keyboard hook

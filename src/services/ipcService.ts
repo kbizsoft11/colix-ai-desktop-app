@@ -5,6 +5,10 @@ import { Shortcut } from '../types/shortcut'
  */
 
 export const ipcService = {
+  openExternalUrl: async (url: string): Promise<void> => {
+    await window.ipcRenderer.invoke('open-external-url', url)
+  },
+
   /**
    * Request the main process to start the keyboard hook
    */
