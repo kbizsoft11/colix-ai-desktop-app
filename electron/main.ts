@@ -46,16 +46,16 @@ function findApplicationExecutable(processName: string): string | null {
     opera: [`${localAppData}\\Programs\\Opera\\opera.exe`, `${programFiles}\\Opera\\launcher.exe`],
     notepad: [`${process.env.WINDIR || 'C:\\Windows'}\\System32\\notepad.exe`],
     'notepad++': [`${programFiles}\\Notepad++\\notepad++.exe`, `${programFilesX86}\\Notepad++\\notepad++.exe`],
-    outlook: [`${programFiles}\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE`],
-    winword: [`${programFiles}\\Microsoft Office\\root\\Office16\\WINWORD.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office16\\WINWORD.EXE`],
-    excel: [`${programFiles}\\Microsoft Office\\root\\Office16\\EXCEL.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office16\\EXCEL.EXE`],
-    powerpnt: [`${programFiles}\\Microsoft Office\\root\\Office16\\POWERPNT.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office16\\POWERPNT.EXE`],
+    code: [`${localAppData}\\Programs\\Microsoft VS Code\\Code.exe`, `${programFiles}\\Microsoft VS Code\\Code.exe`, `${programFilesX86}\\Microsoft VS Code\\Code.exe`],
+    sublime_text: [`${programFiles}\\Sublime Text\\sublime_text.exe`, `${programFilesX86}\\Sublime Text\\sublime_text.exe`, `${localAppData}\\Sublime Text\\sublime_text.exe`],
+    outlook: [14, 15, 16].flatMap(version => [`${programFiles}\\Microsoft Office\\root\\Office${version}\\OUTLOOK.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office${version}\\OUTLOOK.EXE`, `${programFiles}\\Microsoft Office\\Office${version}\\OUTLOOK.EXE`, `${programFilesX86}\\Microsoft Office\\Office${version}\\OUTLOOK.EXE`]),
+    winword: [14, 15, 16].flatMap(version => [`${programFiles}\\Microsoft Office\\root\\Office${version}\\WINWORD.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office${version}\\WINWORD.EXE`, `${programFiles}\\Microsoft Office\\Office${version}\\WINWORD.EXE`, `${programFilesX86}\\Microsoft Office\\Office${version}\\WINWORD.EXE`]),
+    excel: [14, 15, 16].flatMap(version => [`${programFiles}\\Microsoft Office\\root\\Office${version}\\EXCEL.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office${version}\\EXCEL.EXE`, `${programFiles}\\Microsoft Office\\Office${version}\\EXCEL.EXE`, `${programFilesX86}\\Microsoft Office\\Office${version}\\EXCEL.EXE`]),
+    powerpnt: [14, 15, 16].flatMap(version => [`${programFiles}\\Microsoft Office\\root\\Office${version}\\POWERPNT.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office${version}\\POWERPNT.EXE`, `${programFiles}\\Microsoft Office\\Office${version}\\POWERPNT.EXE`, `${programFilesX86}\\Microsoft Office\\Office${version}\\POWERPNT.EXE`]),
     'ms-teams': [`${localAppData}\\Microsoft\\Teams\\current\\Teams.exe`, `${localAppData}\\Microsoft\\Teams\\current\\ms-teams.exe`],
   }
   const candidate = candidates[cleanName]?.find(executable => existsSync(executable))
-  if (candidate) return candidate
-  const result = spawnSync('where.exe', [`${cleanName}.exe`], { encoding: 'utf8', windowsHide: true })
-  return result.status === 0 ? result.stdout.split(/\r?\n/).map(line => line.trim()).find(Boolean) || null : null
+  return candidate || null
 }
 
 function getForegroundWindow(): string {
@@ -197,17 +197,18 @@ ipcMain.handle('open-external-url', async (_event, url: string) => {
 })
 
 ipcMain.handle('get-app-icons', async (_event, processNames: string[]) => {
-  const icons: Record<string, string> = {}
-  for (const processName of processNames) {
+  const entries = await Promise.all(processNames.map(async processName => {
     const executable = findApplicationExecutable(processName)
-    if (!executable) continue
+    if (!executable) return null
     try {
       const image = await app.getFileIcon(executable, { size: 'small' })
-      icons[processName] = image.toDataURL()
+      return [processName, image.toDataURL()] as const
     } catch (error) {
       console.warn(`Unable to read icon for ${processName}:`, error)
+      return null
     }
-  }
+  }))
+  const icons: Record<string, string> = Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== null))
   return icons
 })
 

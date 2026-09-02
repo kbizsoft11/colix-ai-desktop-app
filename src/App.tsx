@@ -82,10 +82,24 @@ function App() {
   }
 
   useEffect(() => {
-    if (!session) return
+    if (!session) {
+      // Authentication is the source of truth for whether shortcuts may be
+      // active. Clear the native listener when there is no signed-in user.
+      setShortcuts([])
+      setProfileUserId(null)
+      setIsHookActive(false)
+      void ipcService.updateShortcuts([])
+      return
+    }
     const loadedFolders = storageManager.getAllFolders()
     setFolders(loadedFolders)
     setActiveFolderId(loadedFolders[0]?.id || '')
+
+    // Clear the previous session's listener state immediately. This prevents
+    // shortcuts from a previous login/session remaining active while the new
+    // Supabase records are being loaded.
+    setShortcuts([])
+    void ipcService.updateShortcuts([])
 
     let cancelled = false
     const loadShortcuts = async () => {
@@ -96,8 +110,12 @@ function App() {
         setProfileUserId(customUserId)
         const loadedShortcuts = await shortcutService.getAll(supabase, customUserId)
         if (cancelled) return
+        console.log(`[SHORTCUTS] Loaded ${loadedShortcuts.length} active records from Supabase: ${loadedShortcuts.map(shortcut => shortcut.name).join(', ') || '(none)'}`)
         setShortcuts(loadedShortcuts)
-        window.setTimeout(() => startKeyboardHook(loadedShortcuts), 500)
+        // Always send the freshly loaded list. startKeyboardHook can be called
+        // while an existing hook is running, so the explicit update below is
+        // required to replace its old in-memory/Python list.
+        await startKeyboardHook(loadedShortcuts)
       } catch (error) {
         console.error('Error loading shortcuts from Supabase:', error)
         const details = error as { message?: string; code?: string }
@@ -155,12 +173,24 @@ function App() {
 
   const startKeyboardHook = async (items: Shortcut[]) => {
     const result = await ipcService.startKeyboardHook(items)
+    // start-keyboard-hook intentionally remains idempotent. Updating here is
+    // what makes a reload/login/delete authoritative even when the native hook
+    // process was already running.
+    await ipcService.updateShortcuts(items)
     if (result.success) setIsHookActive(true)
   }
 
   const activeFolder = folders.find(folder => folder.id === activeFolderId)
   const visibleShortcuts = useMemo(() => shortcuts.filter(shortcut => {
-    const inFolder = shortcut.folderId === activeFolderId || (!shortcut.folderId && activeFolderId === folders[0]?.id)
+    const knownFolderIds = new Set(folders.map(folder => folder.id))
+    // Folders are local UI metadata, while shortcuts are now stored in
+    // Supabase. If local storage was cleared/reinstalled, an old remote
+    // folder_id may no longer exist locally. Keep those records visible in
+    // the default folder instead of showing an incorrect empty state.
+    const orphanedFolder = Boolean(shortcut.folderId && !knownFolderIds.has(shortcut.folderId))
+    const inFolder = shortcut.folderId === activeFolderId
+      || (!shortcut.folderId && activeFolderId === folders[0]?.id)
+      || (orphanedFolder && activeFolderId === folders[0]?.id)
     const query = searchQuery.toLowerCase()
     return inFolder && (!query || shortcut.name.toLowerCase().includes(query) || shortcut.label.toLowerCase().includes(query) || richTextToPlainText(shortcut.content).toLowerCase().includes(query))
   }), [activeFolderId, folders, searchQuery, shortcuts])
@@ -212,7 +242,7 @@ function App() {
     if (!supabase || !session || !profileUserId) return
     try {
       await shortcutService.remove(supabase, profileUserId, id)
-      const next = shortcuts.filter(shortcut => shortcut.id !== id)
+      const next = await shortcutService.getAll(supabase, profileUserId)
       setShortcuts(next)
       void ipcService.updateShortcuts(next)
       if (editingId === id) finishEditor()
@@ -640,7 +670,7 @@ function GroupsView({ onBack, groups, groupsLoading, selectedGroupId, onSelectGr
 }
 
 function AppControlsView({ onBack }: { onBack: () => void }) {
-  const applications = [{ name: 'Google Chrome', process: 'chrome.exe' }, { name: 'Microsoft Edge', process: 'msedge.exe' }, { name: 'Mozilla Firefox', process: 'firefox.exe' }, { name: 'Brave Browser', process: 'brave.exe' }, { name: 'Opera', process: 'opera.exe' }, { name: 'Notepad', process: 'notepad.exe' }, { name: 'Notepad++', process: 'notepad++.exe' }, { name: 'Microsoft Outlook', process: 'outlook.exe' }, { name: 'Microsoft Word', process: 'winword.exe' }, { name: 'Microsoft Excel', process: 'excel.exe' }, { name: 'Microsoft PowerPoint', process: 'powerpnt.exe' }, { name: 'Microsoft Teams', process: 'ms-teams.exe' }]
+  const applications = [{ name: 'Google Chrome', process: 'chrome.exe' }, { name: 'Microsoft Edge', process: 'msedge.exe' }, { name: 'Mozilla Firefox', process: 'firefox.exe' }, { name: 'Brave Browser', process: 'brave.exe' }, { name: 'Opera', process: 'opera.exe' }, { name: 'Notepad', process: 'notepad.exe' }, { name: 'Notepad++', process: 'notepad++.exe' }, { name: 'Visual Studio Code', process: 'code.exe' }, { name: 'Sublime Text', process: 'sublime_text.exe' }, { name: 'Microsoft Outlook', process: 'outlook.exe' }, { name: 'Microsoft Word', process: 'winword.exe' }, { name: 'Microsoft Excel', process: 'excel.exe' }, { name: 'Microsoft PowerPoint', process: 'powerpnt.exe' }, { name: 'Microsoft Teams', process: 'ms-teams.exe' }]
   const [appIcons, setAppIcons] = useState<Record<string, string>>({})
   const [installedApplications, setInstalledApplications] = useState<typeof applications>([])
   const [enabledApps, setEnabledApps] = useState<Record<string, boolean>>(() => {

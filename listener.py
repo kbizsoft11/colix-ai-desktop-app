@@ -1,6 +1,8 @@
 """Global keyboard listener for ColixAI shortcuts."""
 
 import json
+import ctypes
+import os
 import sys
 import time
 from threading import Thread
@@ -10,6 +12,31 @@ from pynput import keyboard
 RESET = "\033[0m"
 CYAN = "\033[36m"
 GREEN = "\033[32m"
+
+def get_foreground_process_name():
+    """Return the executable name of the currently focused Windows app."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        hwnd = user32.GetForegroundWindow()
+        process_id = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        process_query_limited_information = 0x1000
+        handle = kernel32.OpenProcess(process_query_limited_information, False, process_id.value)
+        if not handle:
+            return ""
+        try:
+            buffer = ctypes.create_unicode_buffer(260)
+            buffer_size = ctypes.c_ulong(len(buffer))
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(buffer_size)):
+                return os.path.basename(buffer.value).lower()
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception as error:
+        print(f"[PROCESS] lookup failed: {error}", flush=True)
+    return ""
 
 class ShortcutListener:
     def __init__(self):
@@ -23,7 +50,8 @@ class ShortcutListener:
     def load_shortcuts(self, shortcuts_dict):
         """Load the current shortcut definitions."""
         self.shortcuts = {s['name']: s for s in shortcuts_dict}
-        print(f"[LISTENER] Loaded {len(self.shortcuts)} shortcuts", flush=True)
+        print(f"[LISTENER] Loaded {len(self.shortcuts)} shortcuts with current content", flush=True)
+        print(f"[SHORTCUTS] Active triggers: {', '.join(self.shortcuts.keys()) or '(none)'}", flush=True)
         for name in self.shortcuts:
             print(f"  - '{name}'", flush=True)
 
@@ -51,6 +79,7 @@ class ShortcutListener:
                     "type": "shortcut_detected",
                     "trigger": shortcut_name,
                     "content": shortcut_data['content'],
+                    "process": get_foreground_process_name(),
                 }), flush=True)
                 self.typed_buffer = ""
                 return

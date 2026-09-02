@@ -1,10 +1,31 @@
-import { spawn, spawnSync, ChildProcess } from 'node:child_process'
+import { spawn, ChildProcess } from 'node:child_process'
 import { BrowserWindow, clipboard } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
 
 const terminal = { reset: '\x1b[0m', cyan: '\x1b[36m', yellow: '\x1b[33m', green: '\x1b[32m', magenta: '\x1b[35m' }
+
+// Terminals are always protected from shortcut expansion. This is an
+// intentional hard block and does not depend on the global switch or the
+// per-application settings.
+const blockedTerminalProcesses = new Set([
+  'cmd.exe',
+  'powershell.exe',
+  'pwsh.exe',
+  'wt.exe',
+  'windowsterminal.exe',
+  'conhost.exe',
+  'openconsole.exe',
+  'bash.exe',
+  'wsl.exe',
+  'mintty.exe',
+  'alacritty.exe',
+  'wezterm-gui.exe',
+  'cmder.exe',
+  'hyper.exe',
+  'tabby.exe',
+])
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -158,9 +179,6 @@ export class KeyboardHook {
   private requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null
   private isPasteEnabled: boolean = true
   private appControls: Record<string, boolean> = {}
-  private foregroundProcessName = ''
-  private lastLoggedForegroundProcess = ''
-  private foregroundProcessTimer: NodeJS.Timeout | null = null
 
   constructor(mainWindow: BrowserWindow | null, requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null = null) {
     this.mainWindow = mainWindow
@@ -178,46 +196,25 @@ export class KeyboardHook {
 
   setAppControls(controls: Record<string, boolean>): void {
     this.appControls = Object.fromEntries(Object.entries(controls).map(([name, enabled]) => [name.toLowerCase().endsWith('.exe') ? name.toLowerCase() : `${name.toLowerCase()}.exe`, enabled]))
+    if (Object.prototype.hasOwnProperty.call(this.appControls, 'outlook.exe')) {
+      this.appControls['olk.exe'] = this.appControls['outlook.exe']
+      this.appControls['microsoft.outlookforwindows.exe'] = this.appControls['outlook.exe']
+    }
     console.log(`${terminal.cyan}[APP-CONTROLS]${terminal.reset} 🧩 Updated (${Object.keys(this.appControls).length} apps)`)
     console.log(`${terminal.cyan}[APP-CONTROLS]${terminal.reset} Map:`, this.appControls)
   }
 
-  private getForegroundProcessName(): string {
-    if (process.platform !== 'win32') return ''
-    const command = `Add-Type 'using System; using System.Runtime.InteropServices; public static class ForegroundWindow { [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); }'; $id=0; $null = [ForegroundWindow]::GetWindowThreadProcessId([ForegroundWindow]::GetForegroundWindow(), [ref]$id); if ($id) { (Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName }`
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true })
-    if (result.status !== 0) return ''
-    const outputLines = result.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-    return outputLines[outputLines.length - 1]?.toLowerCase() || ''
-  }
-
-  private isCurrentApplicationEnabled(): boolean {
-    const processName = this.foregroundProcessName
+  private isCurrentApplicationEnabled(processName: string): boolean {
     if (!processName) return true
-    const processKey = processName.endsWith('.exe') ? processName : `${processName}.exe`
+    const normalizedProcessName = processName.trim().toLowerCase()
+    const processKey = normalizedProcessName.endsWith('.exe') ? normalizedProcessName : `${normalizedProcessName}.exe`
+    if (blockedTerminalProcesses.has(processKey)) {
+      console.log(`${terminal.yellow}[BLOCKED]${terminal.reset} 🛡️ Shortcut expansion prevented in terminal: ${processKey}`)
+      return false
+    }
     const setting = this.appControls[processKey]
     console.log(`${terminal.magenta}[DECISION]${terminal.reset} 🔎 ${processKey} → ${setting === false ? 'OFF' : 'ON'}`)
     return setting !== false
-  }
-
-  private startForegroundProcessPolling(): void {
-    if (process.platform !== 'win32' || this.foregroundProcessTimer) return
-    const refresh = () => {
-      this.foregroundProcessName = this.getForegroundProcessName()
-      if (this.foregroundProcessName !== this.lastLoggedForegroundProcess) {
-        this.lastLoggedForegroundProcess = this.foregroundProcessName
-        console.log(`${terminal.yellow}[FOREGROUND]${terminal.reset} 🪟 ${this.foregroundProcessName || '(unknown)'}`)
-      }
-    }
-    refresh()
-    this.foregroundProcessTimer = setInterval(refresh, 500)
-  }
-
-  private stopForegroundProcessPolling(): void {
-    if (!this.foregroundProcessTimer) return
-    clearInterval(this.foregroundProcessTimer)
-    this.foregroundProcessTimer = null
-    this.foregroundProcessName = ''
   }
 
   /**
@@ -231,7 +228,6 @@ export class KeyboardHook {
 
     this.shortcuts = shortcuts
     this.isActive = true
-    this.startForegroundProcessPolling()
 
     console.log('🎹 Keyboard hook STARTING...')
     console.log('📝 Registered shortcuts:')
@@ -254,7 +250,6 @@ export class KeyboardHook {
     }
 
     this.isActive = false
-    this.stopForegroundProcessPolling()
 
     const pythonProcess = this.pythonProcess
     if (pythonProcess) {
@@ -280,7 +275,7 @@ export class KeyboardHook {
    */
   updateShortcuts(shortcuts: Shortcut[]): void {
     this.shortcuts = shortcuts
-    console.log('✏️ Shortcuts updated:', shortcuts.length)
+    console.log(`${terminal.cyan}[SHORTCUTS]${terminal.reset} Updating listener with ${shortcuts.length} shortcuts: ${shortcuts.map(shortcut => shortcut.name).join(', ') || '(none)'}`)
 
     // Send updated shortcuts to Python process
     if (this.pythonProcess && this.pythonProcess.stdin) {
@@ -294,6 +289,7 @@ export class KeyboardHook {
           })),
         }
         this.pythonProcess.stdin.write(JSON.stringify(message) + '\n')
+        console.log(`${terminal.cyan}[SHORTCUTS]${terminal.reset} Update sent to Python listener`)
       } catch (error) {
         console.error('Error updating shortcuts in Python:', error)
       }
@@ -415,15 +411,25 @@ export class KeyboardHook {
   private handlePythonMessage(message: string): void {
     try {
       // Parse JSON messages from Python
-      const data = JSON.parse(message) as {
-        type?: string
-        trigger?: string
-        content?: string
+        const data = JSON.parse(message) as {
+          type?: string
+          trigger?: string
+          content?: string
+          process?: string
       }
 
       if (data.type === 'shortcut_detected' && typeof data.trigger === 'string' && typeof data.content === 'string') {
         const detectedAt = Date.now()
         console.log(`${terminal.green}[DETECTED]${terminal.reset} ✨ "${data.trigger}" at ${new Date(detectedAt).toISOString()}`)
+
+        // Python can briefly emit from an older listener during an update or
+        // restart. The Electron-side list is authoritative, so never paste a
+        // trigger that was deleted and always use the latest saved content.
+        const currentShortcut = this.shortcuts.find(shortcut => shortcut.name === data.trigger)
+        if (!currentShortcut) {
+          console.log(`${terminal.yellow}[STALE]${terminal.reset} Ignoring removed trigger "${data.trigger}"`)
+          return
+        }
 
         // The global listener also sees keystrokes inside ColixAI. Ignore the
         // event here instead of asking Python to inspect Windows processes.
@@ -438,19 +444,19 @@ export class KeyboardHook {
           return
         }
 
-        if (!this.isCurrentApplicationEnabled()) {
+        if (!this.isCurrentApplicationEnabled(data.process || '')) {
           console.log('🔒 Shortcut disabled for the current application')
           return
         }
 
-        console.log(`${terminal.green}[REPLACE]${terminal.reset} 🔄 ${data.content.length} chars; checks ${Date.now() - detectedAt}ms`)
+        console.log(`${terminal.green}[REPLACE]${terminal.reset} 🔄 ${currentShortcut.content.length} chars; checks ${Date.now() - detectedAt}ms`)
 
         // Request replacement through the Python keyboard listener.
-        void this.requestReplacement(data.trigger, data.content)
+        void this.requestReplacement(data.trigger, currentShortcut.content)
 
         // Notify UI
         if (this.mainWindow) {
-          this.mainWindow.webContents.send('shortcut-triggered', data.trigger, data.content)
+          this.mainWindow.webContents.send('shortcut-triggered', data.trigger, currentShortcut.content)
         }
       }
     } catch (error) {

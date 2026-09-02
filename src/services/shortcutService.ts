@@ -86,13 +86,16 @@ export const shortcutService = {
   },
 
   async remove(client: SupabaseClient, userId: string, id: string): Promise<void> {
-    const { error } = await client
+    const { data, error } = await client
       .from('shortcuts')
       .update({ deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq('id', id)
       .eq('user_id', userId)
       .is('deleted_at', null)
+      .select('id')
+      .maybeSingle()
     if (error) throw error
+    if (!data) throw new Error(`Shortcut ${id} was not deleted; no matching active record was found`)
   },
 
   async move(client: SupabaseClient, userId: string, id: string, folderId: string): Promise<void> {

@@ -1,0 +1,18 @@
+:root { color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; color: #172033; background: #f7fbf8; }
+.panel { padding: 24px 20px 20px; }
+.brand { display: flex; align-items: center; gap: 8px; color: #13883d; font-size: 14px; font-weight: 700; letter-spacing: .2px; }
+.brand-mark { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 8px; color: #fff; background: #1dac4b; }
+h1 { margin: 22px 0 7px; font-size: 23px; font-weight: 650; letter-spacing: -.3px; }
+.intro { margin: 0 0 22px; color: #667386; font-size: 13px; line-height: 1.5; }
+.field-label { display: block; margin: 0 0 7px; color: #536174; font-size: 12px; font-weight: 600; }
+textarea { width: 100%; min-height: 78px; padding: 10px 11px; resize: vertical; border: 1px solid #d5e2d8; border-radius: 8px; outline: 0; color: #172033; background: #fff; font: 13px/1.45 "Segoe UI", Arial, sans-serif; }
+textarea:focus { border-color: #1dac4b; box-shadow: 0 0 0 3px #1dac4b22; }
+button { width: 100%; margin-top: 15px; padding: 11px 14px; border: 0; border-radius: 8px; color: #fff; background: #1dac4b; box-shadow: 0 5px 12px #1dac4b32; font: 650 13px "Segoe UI", Arial, sans-serif; cursor: pointer; }
+button:hover { background: #168d3e; }
+button:disabled { opacity: .65; cursor: wait; }
+button span { margin-right: 5px; }
+.status { min-height: 18px; margin: 14px 0 0; color: #667386; font-size: 12px; line-height: 1.45; }
+.status.success { color: #087c39; }
+.status.error { color: #b42318; }

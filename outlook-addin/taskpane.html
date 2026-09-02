@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ColixAI for Outlook</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+  <main class="panel">
+    <div class="brand"><span class="brand-mark">✦</span><span>ColixAI</span></div>
+    <h1>Improve this email</h1>
+    <p class="intro">Make your draft clearer, more professional, and grammatically correct.</p>
+    <label class="field-label" for="instruction">Optional instruction</label>
+    <textarea id="instruction" placeholder="e.g. Make it warm and concise"></textarea>
+    <button id="improve" type="button"><span>✦</span> Improve email</button>
+    <p id="status" class="status" role="status"></p>
+  </main>
+  <script src="taskpane.js"></script>
+</body>
+</html>
