@@ -7,6 +7,10 @@ from threading import Thread
 
 from pynput import keyboard
 
+RESET = "\033[0m"
+CYAN = "\033[36m"
+GREEN = "\033[32m"
+
 class ShortcutListener:
     def __init__(self):
         self.typed_buffer = ""
@@ -42,7 +46,7 @@ class ShortcutListener:
 
         for shortcut_name, shortcut_data in self.shortcuts.items():
             if self.typed_buffer == shortcut_name:
-                print(f"[MATCH] '{shortcut_name}' -> '{shortcut_data['content']}'", flush=True)
+                print(f"{GREEN}[MATCH]{RESET} '{shortcut_name}' at {time.perf_counter():.6f}", flush=True)
                 print(json.dumps({
                     "type": "shortcut_detected",
                     "trigger": shortcut_name,
@@ -72,7 +76,8 @@ class ShortcutListener:
     def replace_text(self, character_count):
         """Remove the typed trigger and paste the clipboard into the target app."""
         import platform
-        
+        started_at = time.perf_counter()
+        print(f"{CYAN}[REPLACE]{RESET} started; deleting {character_count} characters", flush=True)
         for _ in range(max(0, character_count)):
             self.controller.press(keyboard.Key.backspace)
             self.controller.release(keyboard.Key.backspace)
@@ -90,6 +95,7 @@ class ShortcutListener:
             self.controller.release(keyboard.Key.ctrl)
 
         self.typed_buffer = ""
+        print(f"{GREEN}[REPLACE]{RESET} finished in {(time.perf_counter() - started_at) * 1000:.1f}ms", flush=True)
 
 
 def main():

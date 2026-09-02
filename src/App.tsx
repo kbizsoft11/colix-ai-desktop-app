@@ -50,6 +50,15 @@ function App() {
   const [groupDialog, setGroupDialog] = useState<{ mode: 'create' | 'edit'; groupId?: string; name: string; description: string } | null>(null)
 
   useEffect(() => {
+    try {
+      const storedControls = window.localStorage.getItem('colixai-app-controls')
+      if (storedControls) void ipcService.setAppControls(JSON.parse(storedControls) as Record<string, boolean>)
+    } catch (error) {
+      console.error('Unable to restore application controls:', error)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!supabase) {
       setAuthLoading(false)
       return
@@ -370,6 +379,14 @@ function App() {
     </div>
   }
 
+  if (route === '/app-controls') {
+    return <div className="app-shell">
+      <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
+      <AppControlsView onBack={() => navigate('/')} />
+      {notification && <div className="toast">{notification}</div>}
+    </div>
+  }
+
   if (route === '/groups') {
     return (
       <div className="app-shell">
@@ -620,6 +637,32 @@ function GroupsView({ onBack, groups, groupsLoading, selectedGroupId, onSelectGr
       </section>
     </main>
   )
+}
+
+function AppControlsView({ onBack }: { onBack: () => void }) {
+  const applications = [{ name: 'Google Chrome', process: 'chrome.exe' }, { name: 'Microsoft Edge', process: 'msedge.exe' }, { name: 'Mozilla Firefox', process: 'firefox.exe' }, { name: 'Brave Browser', process: 'brave.exe' }, { name: 'Opera', process: 'opera.exe' }, { name: 'Notepad', process: 'notepad.exe' }, { name: 'Notepad++', process: 'notepad++.exe' }, { name: 'Microsoft Outlook', process: 'outlook.exe' }, { name: 'Microsoft Word', process: 'winword.exe' }, { name: 'Microsoft Excel', process: 'excel.exe' }, { name: 'Microsoft PowerPoint', process: 'powerpnt.exe' }, { name: 'Microsoft Teams', process: 'ms-teams.exe' }]
+  const [appIcons, setAppIcons] = useState<Record<string, string>>({})
+  const [installedApplications, setInstalledApplications] = useState<typeof applications>([])
+  const [enabledApps, setEnabledApps] = useState<Record<string, boolean>>(() => {
+    try {
+      const stored = window.localStorage.getItem('colixai-app-controls')
+      return stored ? { ...Object.fromEntries(applications.map(app => [app.process, true])), ...JSON.parse(stored) as Record<string, boolean> } : Object.fromEntries(applications.map(app => [app.process, true]))
+    } catch { return Object.fromEntries(applications.map(app => [app.process, true])) }
+  })
+
+  useEffect(() => {
+    window.localStorage.setItem('colixai-app-controls', JSON.stringify(enabledApps))
+    void ipcService.setAppControls(enabledApps)
+  }, [enabledApps])
+
+  useEffect(() => {
+    void ipcService.getAppIcons(applications.map(application => application.process)).then(icons => {
+      setAppIcons(icons)
+      setInstalledApplications(applications.filter(application => Boolean(icons[application.process])))
+    })
+  }, [])
+
+  return <main className="app-controls-main"><section className="app-controls-container"><div className="app-controls-heading"><div><p className="workspace-page-label">SHORTCUT SETTINGS</p><h1>App controls</h1><p>Choose which applications can use your shortcuts.</p></div><div className="app-controls-note"><Icon name="grid" size={18} /> Global toggle has priority</div></div><section className="app-controls-card"><div className="app-controls-card-header"><div><h2>Application access</h2><p>Shortcuts are enabled for these apps by default.</p></div><span>{installedApplications.length} apps detected</span></div><div className="app-controls-table"><div className="app-controls-row app-controls-header"><span>APPLICATION</span><span>PROCESS</span><span>SHORTCUTS</span></div>{installedApplications.length ? installedApplications.map(application => <div className="app-controls-row" key={application.process}><span className="app-name"><span className="app-icon"><img src={appIcons[application.process]} alt="" /></span>{application.name}</span><code>{application.process}</code><label className="app-toggle"><input type="checkbox" checked={enabledApps[application.process] !== false} onChange={() => setEnabledApps(previous => ({ ...previous, [application.process]: previous[application.process] === false }))} /><span /></label></div>) : <div className="app-controls-empty">Detecting installed applications...</div>}</div></section><button className="groups-back-button" onClick={onBack}><Icon name="back" size={15} /> Back</button></section></main>
 }
 
 function WorkspaceView({ email, onBack }: { email: string; onBack: () => void }) {

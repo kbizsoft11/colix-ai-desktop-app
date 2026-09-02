@@ -9,6 +9,15 @@ export const ipcService = {
     await window.ipcRenderer.invoke('open-external-url', url)
   },
 
+  getAppIcons: async (processNames: string[]): Promise<Record<string, string>> => {
+    try {
+      return await window.ipcRenderer.invoke('get-app-icons', processNames)
+    } catch (error) {
+      console.error('Error loading application icons:', error)
+      return {}
+    }
+  },
+
   /**
    * Request the main process to start the keyboard hook
    */
@@ -58,6 +67,15 @@ export const ipcService = {
     } catch (error) {
       console.error('Error toggling paste:', error)
       return { success: false, message: 'Failed to toggle paste' }
+    }
+  },
+
+  setAppControls: async (controls: Record<string, boolean>): Promise<{ success: boolean; message: string }> => {
+    try {
+      return await window.ipcRenderer.invoke('set-app-controls', controls)
+    } catch (error) {
+      console.error('Error updating application controls:', error)
+      return { success: false, message: 'Failed to update application controls' }
     }
   },
 

@@ -31,6 +31,7 @@ export default function Header({ searchQuery, setSearchQuery, email, onLogout, o
         <div className="profile-menu">
           <div className="profile-menu-email">{email || 'Signed-in user'}</div>
           <button className="profile-menu-link" onClick={onProfile}><Icon name="user" size={15} /> Profile</button>
+          <button className="profile-menu-link" onClick={() => { window.location.hash = '/app-controls' }}><Icon name="grid" size={15} /> App controls</button>
           <button onClick={() => void onLogout()}><Icon name="logout" size={15} /> Logout</button>
         </div>
       </div>

@@ -2,6 +2,7 @@ import { app, BrowserWindow, clipboard, ipcMain, screen, shell } from 'electron'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { existsSync } from 'node:fs'
 import { createKeyboardHook } from './keyboardHook'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -30,6 +31,32 @@ let keyboardHook: ReturnType<typeof createKeyboardHook> | null = null
 type HookShortcuts = Parameters<ReturnType<typeof createKeyboardHook>['start']>[0]
 type DynamicField = { label: string; defaultValue: string }
 const pendingFieldRequests = new Map<string, { resolve: (values: Record<string, string> | null) => void; targetWindow: string }>()
+
+function findApplicationExecutable(processName: string): string | null {
+  if (process.platform !== 'win32') return null
+  const cleanName = processName.toLowerCase().replace(/\.exe$/, '')
+  const localAppData = process.env.LOCALAPPDATA || ''
+  const programFiles = process.env.ProgramFiles || ''
+  const programFilesX86 = process.env['ProgramFiles(x86)'] || ''
+  const candidates: Record<string, string[]> = {
+    chrome: [`${localAppData}\\Google\\Chrome\\Application\\chrome.exe`, `${programFiles}\\Google\\Chrome\\Application\\chrome.exe`],
+    msedge: [`${programFilesX86}\\Microsoft\\Edge\\Application\\msedge.exe`, `${localAppData}\\Microsoft\\Edge\\Application\\msedge.exe`],
+    firefox: [`${programFiles}\\Mozilla Firefox\\firefox.exe`, `${programFilesX86}\\Mozilla Firefox\\firefox.exe`],
+    brave: [`${localAppData}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`, `${programFiles}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`],
+    opera: [`${localAppData}\\Programs\\Opera\\opera.exe`, `${programFiles}\\Opera\\launcher.exe`],
+    notepad: [`${process.env.WINDIR || 'C:\\Windows'}\\System32\\notepad.exe`],
+    'notepad++': [`${programFiles}\\Notepad++\\notepad++.exe`, `${programFilesX86}\\Notepad++\\notepad++.exe`],
+    outlook: [`${programFiles}\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office16\\OUTLOOK.EXE`],
+    winword: [`${programFiles}\\Microsoft Office\\root\\Office16\\WINWORD.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office16\\WINWORD.EXE`],
+    excel: [`${programFiles}\\Microsoft Office\\root\\Office16\\EXCEL.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office16\\EXCEL.EXE`],
+    powerpnt: [`${programFiles}\\Microsoft Office\\root\\Office16\\POWERPNT.EXE`, `${programFilesX86}\\Microsoft Office\\root\\Office16\\POWERPNT.EXE`],
+    'ms-teams': [`${localAppData}\\Microsoft\\Teams\\current\\Teams.exe`, `${localAppData}\\Microsoft\\Teams\\current\\ms-teams.exe`],
+  }
+  const candidate = candidates[cleanName]?.find(executable => existsSync(executable))
+  if (candidate) return candidate
+  const result = spawnSync('where.exe', [`${cleanName}.exe`], { encoding: 'utf8', windowsHide: true })
+  return result.status === 0 ? result.stdout.split(/\r?\n/).map(line => line.trim()).find(Boolean) || null : null
+}
 
 function getForegroundWindow(): string {
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Add-Type \'using System; using System.Runtime.InteropServices; public static class Win32 { [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); }\'; [Console]::Write([Win32]::GetForegroundWindow())'], { encoding: 'utf8', windowsHide: true })
@@ -169,6 +196,21 @@ ipcMain.handle('open-external-url', async (_event, url: string) => {
   return { success: true }
 })
 
+ipcMain.handle('get-app-icons', async (_event, processNames: string[]) => {
+  const icons: Record<string, string> = {}
+  for (const processName of processNames) {
+    const executable = findApplicationExecutable(processName)
+    if (!executable) continue
+    try {
+      const image = await app.getFileIcon(executable, { size: 'small' })
+      icons[processName] = image.toDataURL()
+    } catch (error) {
+      console.warn(`Unable to read icon for ${processName}:`, error)
+    }
+  }
+  return icons
+})
+
 /**
  * Start keyboard hook
  */
@@ -250,6 +292,17 @@ ipcMain.handle('toggle-paste', async (_event, enabled: boolean) => {
   } catch (error) {
     console.error('Error toggling paste:', error)
     return { success: false, message: 'Failed to toggle paste' }
+  }
+})
+
+ipcMain.handle('set-app-controls', async (_event, controls: Record<string, boolean>) => {
+  try {
+    if (!keyboardHook) keyboardHook = createKeyboardHook(win, showFieldWindow)
+    keyboardHook.setAppControls(controls)
+    return { success: true, message: 'Application controls updated' }
+  } catch (error) {
+    console.error('Error updating application controls:', error)
+    return { success: false, message: 'Failed to update application controls' }
   }
 })
 

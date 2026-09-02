@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 
-export type AppRoute = '/' | '/profile' | '/marketplace' | '/workspace' | '/teams' | '/groups' | '/shortcut/new' | `/shortcut/${string}`
+export type AppRoute = '/' | '/profile' | '/marketplace' | '/workspace' | '/app-controls' | '/teams' | '/groups' | '/shortcut/new' | `/shortcut/${string}`
 
 const readRoute = (): AppRoute => {
   const value = window.location.hash.replace(/^#/, '') || '/'
-  if (value === '/profile' || value === '/marketplace' || value === '/workspace' || value === '/teams' || value === '/groups' || value === '/shortcut/new' || value.startsWith('/shortcut/')) return value as AppRoute
+  if (value === '/profile' || value === '/marketplace' || value === '/workspace' || value === '/app-controls' || value === '/teams' || value === '/groups' || value === '/shortcut/new' || value.startsWith('/shortcut/')) return value as AppRoute
   return '/'
 }
 

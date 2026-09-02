@@ -1,8 +1,10 @@
-import { spawn, ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, ChildProcess } from 'node:child_process'
 import { BrowserWindow, clipboard } from 'electron'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
+
+const terminal = { reset: '\x1b[0m', cyan: '\x1b[36m', yellow: '\x1b[33m', green: '\x1b[32m', magenta: '\x1b[35m' }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -155,6 +157,10 @@ export class KeyboardHook {
   private testingInputFocused = false
   private requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null
   private isPasteEnabled: boolean = true
+  private appControls: Record<string, boolean> = {}
+  private foregroundProcessName = ''
+  private lastLoggedForegroundProcess = ''
+  private foregroundProcessTimer: NodeJS.Timeout | null = null
 
   constructor(mainWindow: BrowserWindow | null, requestFieldValues: ((fields: DynamicField[], content: string) => Promise<Record<string, string> | null>) | null = null) {
     this.mainWindow = mainWindow
@@ -170,6 +176,50 @@ export class KeyboardHook {
     console.log(`🔀 Paste functionality ${enabled ? 'ENABLED' : 'DISABLED'}`)
   }
 
+  setAppControls(controls: Record<string, boolean>): void {
+    this.appControls = Object.fromEntries(Object.entries(controls).map(([name, enabled]) => [name.toLowerCase().endsWith('.exe') ? name.toLowerCase() : `${name.toLowerCase()}.exe`, enabled]))
+    console.log(`${terminal.cyan}[APP-CONTROLS]${terminal.reset} 🧩 Updated (${Object.keys(this.appControls).length} apps)`)
+    console.log(`${terminal.cyan}[APP-CONTROLS]${terminal.reset} Map:`, this.appControls)
+  }
+
+  private getForegroundProcessName(): string {
+    if (process.platform !== 'win32') return ''
+    const command = `Add-Type 'using System; using System.Runtime.InteropServices; public static class ForegroundWindow { [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); }'; $id=0; $null = [ForegroundWindow]::GetWindowThreadProcessId([ForegroundWindow]::GetForegroundWindow(), [ref]$id); if ($id) { (Get-Process -Id $id -ErrorAction SilentlyContinue).ProcessName }`
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true })
+    if (result.status !== 0) return ''
+    const outputLines = result.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    return outputLines[outputLines.length - 1]?.toLowerCase() || ''
+  }
+
+  private isCurrentApplicationEnabled(): boolean {
+    const processName = this.foregroundProcessName
+    if (!processName) return true
+    const processKey = processName.endsWith('.exe') ? processName : `${processName}.exe`
+    const setting = this.appControls[processKey]
+    console.log(`${terminal.magenta}[DECISION]${terminal.reset} 🔎 ${processKey} → ${setting === false ? 'OFF' : 'ON'}`)
+    return setting !== false
+  }
+
+  private startForegroundProcessPolling(): void {
+    if (process.platform !== 'win32' || this.foregroundProcessTimer) return
+    const refresh = () => {
+      this.foregroundProcessName = this.getForegroundProcessName()
+      if (this.foregroundProcessName !== this.lastLoggedForegroundProcess) {
+        this.lastLoggedForegroundProcess = this.foregroundProcessName
+        console.log(`${terminal.yellow}[FOREGROUND]${terminal.reset} 🪟 ${this.foregroundProcessName || '(unknown)'}`)
+      }
+    }
+    refresh()
+    this.foregroundProcessTimer = setInterval(refresh, 500)
+  }
+
+  private stopForegroundProcessPolling(): void {
+    if (!this.foregroundProcessTimer) return
+    clearInterval(this.foregroundProcessTimer)
+    this.foregroundProcessTimer = null
+    this.foregroundProcessName = ''
+  }
+
   /**
    * Start the keyboard hook
    */
@@ -181,6 +231,7 @@ export class KeyboardHook {
 
     this.shortcuts = shortcuts
     this.isActive = true
+    this.startForegroundProcessPolling()
 
     console.log('🎹 Keyboard hook STARTING...')
     console.log('📝 Registered shortcuts:')
@@ -203,6 +254,7 @@ export class KeyboardHook {
     }
 
     this.isActive = false
+    this.stopForegroundProcessPolling()
 
     const pythonProcess = this.pythonProcess
     if (pythonProcess) {
@@ -370,7 +422,8 @@ export class KeyboardHook {
       }
 
       if (data.type === 'shortcut_detected' && typeof data.trigger === 'string' && typeof data.content === 'string') {
-        console.log(`✨ SHORTCUT DETECTED: "${data.trigger}"`)
+        const detectedAt = Date.now()
+        console.log(`${terminal.green}[DETECTED]${terminal.reset} ✨ "${data.trigger}" at ${new Date(detectedAt).toISOString()}`)
 
         // The global listener also sees keystrokes inside ColixAI. Ignore the
         // event here instead of asking Python to inspect Windows processes.
@@ -385,7 +438,12 @@ export class KeyboardHook {
           return
         }
 
-        console.log(`🔄 REPLACING WITH: "${data.content}"`)
+        if (!this.isCurrentApplicationEnabled()) {
+          console.log('🔒 Shortcut disabled for the current application')
+          return
+        }
+
+        console.log(`${terminal.green}[REPLACE]${terminal.reset} 🔄 ${data.content.length} chars; checks ${Date.now() - detectedAt}ms`)
 
         // Request replacement through the Python keyboard listener.
         void this.requestReplacement(data.trigger, data.content)
@@ -413,6 +471,7 @@ export class KeyboardHook {
     }
 
     this.replacementInProgress = true
+    const replacementStartedAt = Date.now()
     try {
       console.log(`📋 Preparing instant replacement (${content.length} characters)`)
       const previousClipboardText = clipboard.readText()
@@ -443,11 +502,12 @@ export class KeyboardHook {
       // Give the target application time to consume Ctrl+V before restoring
       // the user's previous text clipboard contents.
       setTimeout(() => clipboard.writeText(previousClipboardText), 300)
-      console.log('✅ Replacement requested')
+      console.log(`${terminal.green}[TIMING]${terminal.reset} ✅ Requested after ${Date.now() - replacementStartedAt}ms`)
     } catch (error) {
       console.error('❌ Error performing replacement:', error)
     } finally {
       this.replacementInProgress = false
+      console.log(`${terminal.green}[TIMING]${terminal.reset} ⏱️ Flow finished in ${Date.now() - replacementStartedAt}ms`)
     }
   }
 
