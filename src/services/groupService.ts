@@ -11,11 +11,11 @@ export type Group = {
 /** Service for fetching and creating workspace groups */
 export const groupService = {
   /** GET groups for a workspace */
-  async getAll(workspaceId: string): Promise<Group[]> {
+  async getAll(workspaceId: string, userEmail: string): Promise<Group[]> {
     const url = `https://extensions.kbizsoft.com/magicaa-extension/workspace-groups.php?workspace_id=${workspaceId}`;
     const response = await fetch(url, {
        headers: {
-      'X-User-Email': "abhishekkumarphp.kbizsoft@gmail.com"
+      'X-User-Email': userEmail
     }
     });
     if (!response.ok) {
@@ -27,7 +27,7 @@ export const groupService = {
   },
 
   /** POST create a new group */
-  async create(workspaceId: string, name: string, description: string): Promise<Group> {
+  async create(workspaceId: string, userEmail: string, name: string, description: string): Promise<Group> {
     const url = `https://extensions.kbizsoft.com/magicaa-extension/workspace-groups.php`;
     const payload = {
       action: 'create_group',
@@ -39,7 +39,7 @@ export const groupService = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Email': "abhishekkumarphp.kbizsoft@gmail.com",
+        'X-User-Email': userEmail,
       },
       body: JSON.stringify(payload),
     });
@@ -50,12 +50,12 @@ export const groupService = {
   },
 
   /** Update an existing workspace group */
-  async update(workspaceId: string, groupId: string, name: string, description: string): Promise<Group> {
+  async update(workspaceId: string, userEmail: string, groupId: string, name: string, description: string): Promise<Group> {
     const response = await fetch('https://extensions.kbizsoft.com/magicaa-extension/workspace-groups.php', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Email': 'abhishekkumarphp.kbizsoft@gmail.com',
+        'X-User-Email': userEmail,
       },
       body: JSON.stringify({ action: 'update_group', workspace_id: workspaceId, group_id: groupId, name, description }),
     });
@@ -65,12 +65,12 @@ export const groupService = {
   },
 
   /** Delete an existing workspace group */
-  async remove(workspaceId: string, groupId: string): Promise<void> {
+  async remove(workspaceId: string, userEmail: string, groupId: string): Promise<void> {
     const response = await fetch('https://extensions.kbizsoft.com/magicaa-extension/workspace-groups.php', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-User-Email': 'abhishekkumarphp.kbizsoft@gmail.com',
+        'X-User-Email': userEmail,
       },
       body: JSON.stringify({ action: 'delete_group', workspace_id: workspaceId, group_id: groupId }),
     });

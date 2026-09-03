@@ -20,7 +20,7 @@ import { groupService, type Group } from "./services/groupService";
 import Icon, { type IconName } from './components/Icon'
 import Header from './components/Header'
 import { useHashRoute } from './router/useHashRoute'
-import { workspaceService, type WorkspaceInvitation, type WorkspaceMember } from './services/workspaceService'
+import { workspaceService, type OwnedWorkspace, type WorkspaceInvitation, type WorkspaceMember } from './services/workspaceService'
 
 const shortcutDisplayName = (shortcut: Shortcut) => shortcut.label.trim() || shortcut.name
 
@@ -29,6 +29,7 @@ function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [profileUserId, setProfileUserId] = useState<string | null>(null)
+  const [ownedWorkspace, setOwnedWorkspace] = useState<OwnedWorkspace | null>(null)
   const [shortcuts, setShortcuts] = useState<Shortcut[]>([])
   const [folders, setFolders] = useState<ShortcutFolder[]>([])
   const [activeFolderId, setActiveFolderId] = useState('')
@@ -87,6 +88,7 @@ function App() {
       // active. Clear the native listener when there is no signed-in user.
       setShortcuts([])
       setProfileUserId(null)
+      setOwnedWorkspace(null)
       setIsHookActive(false)
       void ipcService.updateShortcuts([])
       return
@@ -140,22 +142,29 @@ function App() {
 
   // Load groups when Groups view is shown
   useEffect(() => {
-    if (route !== '/groups') return
-    const workspaceId = 'be0df420-f9f7-4ad2-a716-48ea4355175e'
+    if (!['/groups', '/teams', '/workspace'].includes(route)) return
+    const userEmail = session?.user.email || ''
+    if (!supabase || !userEmail) return
+    let cancelled = false
     void (async () => {
       try {
         setGroupsLoading(true)
-        const data = await groupService.getAll(workspaceId)
+        const workspace = ownedWorkspace || await workspaceService.getOwnedWorkspace(supabase, userEmail)
+        if (cancelled) return
+        setOwnedWorkspace(workspace)
+        const data = await groupService.getAll(workspace.id, userEmail)
+        if (cancelled) return
         setGroups(data)
         setSelectedGroupId(current => current && data.some(group => group.id === current) ? current : data[0]?.id || null)
       } catch (e) {
         console.error('Failed to load groups', e)
         notify && notify('Unable to load groups')
       } finally {
-        setGroupsLoading(false)
+        if (!cancelled) setGroupsLoading(false)
       }
     })()
-  }, [route])
+    return () => { cancelled = true }
+  }, [route, session])
 
   useEffect(() => {
     if (route === '/shortcut/new') {
@@ -396,7 +405,7 @@ function App() {
   if (route === '/teams') {
     return <div className="app-shell">
       <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
-      <TeamsView onBack={() => navigate('/')} />
+      <TeamsView email={session.user.email || ''} workspaceId={ownedWorkspace?.id || ''} onBack={() => navigate('/')} />
       {notification && <div className="toast">{notification}</div>}
     </div>
   }
@@ -404,7 +413,7 @@ function App() {
   if (route === '/workspace') {
     return <div className="app-shell">
       <Header searchQuery={searchQuery} setSearchQuery={setSearchQuery} email={session.user.email} onLogout={handleLogout} onHome={() => navigate('/')} onProfile={() => navigate('/profile')} onMarketplace={() => navigate('/marketplace')} onWorkspace={() => navigate('/workspace')} onTeams={() => navigate('/teams')} onGroups={() => navigate('/groups')} />
-      <WorkspaceView email={session.user.email || 'abhishekkumarphp.kbizsoft@gmail.com'} onBack={() => navigate('/')} />
+      <WorkspaceView email={session.user.email || ''} workspaceId={ownedWorkspace?.id || ''} onBack={() => navigate('/')} />
       {notification && <div className="toast">{notification}</div>}
     </div>
   }
@@ -432,8 +441,9 @@ function App() {
           onDeleteGroup={async group => {
             if (!window.confirm(`Delete the ${group.name} group?`)) return
             try {
-              await groupService.remove('be0df420-f9f7-4ad2-a716-48ea435517e5', group.id)
-              const refreshed = await groupService.getAll('be0df420-f9f7-4ad2-a716-48ea435517e5')
+              if (!ownedWorkspace) throw new Error('Workspace is not loaded')
+              await groupService.remove(ownedWorkspace.id, session.user.email || '', group.id)
+              const refreshed = await groupService.getAll(ownedWorkspace.id, session.user.email || '')
               setGroups(refreshed)
               setSelectedGroupId(refreshed[0]?.id || null)
               notify('Group deleted')
@@ -446,8 +456,11 @@ function App() {
         <GroupDialog
           dialog={groupDialog}
           setDialog={setGroupDialog}
+          workspaceId={ownedWorkspace?.id || ''}
+          userEmail={session.user.email || ''}
           onCreated={async () => {
-            const refreshed = await groupService.getAll('be0df420-f9f7-4ad2-a716-48ea4355175e')
+            if (!ownedWorkspace) return
+            const refreshed = await groupService.getAll(ownedWorkspace.id, session.user.email || '')
             setGroups(refreshed)
             setSelectedGroupId(current => current || refreshed[0]?.id || null)
             notify('Group created')
@@ -695,8 +708,8 @@ function AppControlsView({ onBack }: { onBack: () => void }) {
   return <main className="app-controls-main"><section className="app-controls-container"><div className="app-controls-heading"><div><p className="workspace-page-label">SHORTCUT SETTINGS</p><h1>App controls</h1><p>Choose which applications can use your shortcuts.</p></div><div className="app-controls-note"><Icon name="grid" size={18} /> Global toggle has priority</div></div><section className="app-controls-card"><div className="app-controls-card-header"><div><h2>Application access</h2><p>Shortcuts are enabled for these apps by default.</p></div><span>{installedApplications.length} apps detected</span></div><div className="app-controls-table"><div className="app-controls-row app-controls-header"><span>APPLICATION</span><span>PROCESS</span><span>SHORTCUTS</span></div>{installedApplications.length ? installedApplications.map(application => <div className="app-controls-row" key={application.process}><span className="app-name"><span className="app-icon"><img src={appIcons[application.process]} alt="" /></span>{application.name}</span><code>{application.process}</code><label className="app-toggle"><input type="checkbox" checked={enabledApps[application.process] !== false} onChange={() => setEnabledApps(previous => ({ ...previous, [application.process]: previous[application.process] === false }))} /><span /></label></div>) : <div className="app-controls-empty">Detecting installed applications...</div>}</div></section><button className="groups-back-button" onClick={onBack}><Icon name="back" size={15} /> Back</button></section></main>
 }
 
-function WorkspaceView({ email, onBack }: { email: string; onBack: () => void }) {
-  const [workspaceName, setWorkspaceName] = useState("abhishekkumarphp.kbizsoft's Workspace")
+function WorkspaceView({ email, workspaceId, onBack }: { email: string; workspaceId: string; onBack: () => void }) {
+  const [workspaceName, setWorkspaceName] = useState(`${email}'s Workspace`)
   const [nameDialog, setNameDialog] = useState<string | null>(null)
   const [isSavingName, setIsSavingName] = useState(false)
   const [nameError, setNameError] = useState('')
@@ -715,7 +728,7 @@ function WorkspaceView({ email, onBack }: { email: string; onBack: () => void })
       try {
         setWorkspaceLoading(true)
         setWorkspaceError('')
-        const result = activeWorkspaceTab === 'members' ? await workspaceService.getMembers() : await workspaceService.getInvitations()
+        const result = activeWorkspaceTab === 'members' ? await workspaceService.getMembers(email) : await workspaceService.getInvitations(email)
         if (cancelled) return
         if (activeWorkspaceTab === 'members') setMembers(result.items as WorkspaceMember[])
         else setInvitations(result.items as WorkspaceInvitation[])
@@ -737,8 +750,8 @@ function WorkspaceView({ email, onBack }: { email: string; onBack: () => void })
     try {
       setIsSendingInvite(true)
       setInviteError('')
-      await workspaceService.sendInvitation(inviteDialog.email.trim(), inviteDialog.role)
-      const refreshedInvitations = await workspaceService.getInvitations()
+      await workspaceService.sendInvitation(email, inviteDialog.email.trim(), inviteDialog.role)
+      const refreshedInvitations = await workspaceService.getInvitations(email)
       setInvitations(refreshedInvitations.items)
       setInviteDialog(null)
       setActiveWorkspaceTab('invitations')
@@ -756,7 +769,8 @@ function WorkspaceView({ email, onBack }: { email: string; onBack: () => void })
     try {
       setIsSavingName(true)
       setNameError('')
-      setWorkspaceName(await workspaceService.updateName(name))
+      if (!workspaceId) throw new Error('Workspace is not loaded')
+      setWorkspaceName(await workspaceService.updateName(email, workspaceId, name))
       setNameDialog(null)
     } catch (error) {
       setNameError(error instanceof Error ? error.message : 'Unable to update workspace name')
@@ -784,7 +798,7 @@ interface TeamPlan {
   monthly_price: number
 }
 
-function TeamsView({ onBack }: { onBack: () => void }) {
+function TeamsView({ email, workspaceId, onBack }: { email: string; workspaceId: string; onBack: () => void }) {
   const [plans, setPlans] = useState<TeamPlan[]>([])
   const [plansLoading, setPlansLoading] = useState(true)
   const [plansError, setPlansError] = useState('')
@@ -796,7 +810,7 @@ function TeamsView({ onBack }: { onBack: () => void }) {
         setPlansLoading(true)
         setPlansError('')
         const response = await fetch('https://extensions.kbizsoft.com/magicaa-extension/teams-plans.php', {
-          headers: { 'X-User-Email': 'abhishekkumarphp.kbizsoft@gmail.com' },
+          headers: { 'X-User-Email': email },
           signal: controller.signal,
         })
         if (!response.ok) throw new Error(`Request failed (${response.status})`)
@@ -820,9 +834,10 @@ function TeamsView({ onBack }: { onBack: () => void }) {
   const orderedPlans = [...plans].sort((a, b) => Number(a.plan_code === 'custom') - Number(b.plan_code === 'custom'))
   const openCheckout = (planCode: string) => {
     const checkoutUrl = new URL('https://extensions.kbizsoft.com/magicaa-extension/paypal-checkout.html')
-    checkoutUrl.searchParams.set('workspace_id', '3894f28c-8f53-4624-8132-7ec4320c5a0b')
+    if (!workspaceId) return
+    checkoutUrl.searchParams.set('workspace_id', workspaceId)
     checkoutUrl.searchParams.set('plan_code', planCode)
-    checkoutUrl.searchParams.set('user_email', 'abhishekkumarphp.kbizsoft@gmail.com')
+    checkoutUrl.searchParams.set('user_email', email)
     void ipcService.openExternalUrl(checkoutUrl.toString())
   }
 
@@ -1025,13 +1040,13 @@ function FolderDialog({ dialog, setDialog, onSave }: { dialog: { mode: 'create' 
 }
 
 // Group creation dialog
-function GroupDialog({ dialog, setDialog, onCreated }: { dialog: { mode: 'create' | 'edit'; groupId?: string; name: string; description: string } | null; setDialog: (d: { mode: 'create' | 'edit'; groupId?: string; name: string; description: string } | null) => void; onCreated: () => void | Promise<void> }) {
+function GroupDialog({ dialog, setDialog, onCreated, userEmail, workspaceId }: { dialog: { mode: 'create' | 'edit'; groupId?: string; name: string; description: string } | null; setDialog: (d: { mode: 'create' | 'edit'; groupId?: string; name: string; description: string } | null) => void; onCreated: () => void | Promise<void>; userEmail: string; workspaceId: string }) {
   const handleSubmit = async () => {
     if (!dialog) return
-    const workspaceId = 'be0df420-f9f7-4ad2-a716-48ea4355175e'
+    if (!workspaceId) return
     try {
-      if (dialog.mode === 'edit' && dialog.groupId) await groupService.update(workspaceId, dialog.groupId, dialog.name.trim(), dialog.description.trim())
-      else await groupService.create(workspaceId, dialog.name.trim(), dialog.description.trim())
+      if (dialog.mode === 'edit' && dialog.groupId) await groupService.update(workspaceId, userEmail, dialog.groupId, dialog.name.trim(), dialog.description.trim())
+      else await groupService.create(workspaceId, userEmail, dialog.name.trim(), dialog.description.trim())
       setDialog(null)
       await onCreated()
     } catch (e) {
