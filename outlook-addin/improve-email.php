@@ -3,8 +3,8 @@ declare(strict_types=1);
 
 // Store this file outside the public web root when possible. Otherwise replace
 // the placeholder and restrict direct access to this file at the server level.
-$qwenApiKey = getenv('QWEN_API_KEY') ?: 'REPLACE_WITH_QWEN_API_KEY';
-$qwenEndpoint = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions';
+$aiApiKey = getenv('QWEN_API_KEY') ?: 'REPLACE_WITH_AI_API_KEY';
+$aiEndpoint = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions';
 
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: https://extensions.kbizsoft.com');
@@ -23,7 +23,7 @@ function respond(int $status, array $payload): void {
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') respond(405, ['success' => false, 'message' => 'POST required.']);
-if ($qwenApiKey === 'REPLACE_WITH_QWEN_API_KEY') respond(500, ['success' => false, 'message' => 'Qwen API key is not configured.']);
+if ($aiApiKey === 'REPLACE_WITH_AI_API_KEY') respond(500, ['success' => false, 'message' => 'The AI service is not configured.']);
 
 $input = json_decode(file_get_contents('php://input') ?: '', true);
 if (!is_array($input)) respond(400, ['success' => false, 'message' => 'Invalid JSON request.']);
@@ -38,35 +38,46 @@ $prompt = "Improve this Outlook email. Correct grammar and spelling, make the wo
 if ($instruction !== '') $prompt .= "\n\nAdditional instruction:\n{$instruction}";
 
 $request = json_encode([
-    'model' => 'qwen3.8-flash',
+    'model' => 'qwen3.5-flash',
     'messages' => [['role' => 'user', 'content' => $prompt]],
     'stream' => false,
     'enable_thinking' => false,
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-$curl = curl_init($qwenEndpoint);
+$curl = curl_init($aiEndpoint);
 curl_setopt_array($curl, [
     CURLOPT_POST => true,
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_TIMEOUT => 45,
-    CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $qwenApiKey, 'Content-Type: application/json'],
+    CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $aiApiKey, 'Content-Type: application/json'],
     CURLOPT_POSTFIELDS => $request,
 ]);
 $raw = curl_exec($curl);
 $curlError = curl_error($curl);
 $httpCode = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE);
 curl_close($curl);
-if ($raw === false) respond(502, ['success' => false, 'message' => 'Unable to contact Qwen: ' . $curlError]);
+if ($raw === false) respond(502, ['success' => false, 'message' => 'Unable to contact the AI service: ' . $curlError]);
 
-$qwen = json_decode($raw, true);
-if ($httpCode < 200 || $httpCode >= 300 || !is_array($qwen)) respond(502, ['success' => false, 'message' => 'Qwen returned an invalid response.']);
-$content = $qwen['choices'][0]['message']['content'] ?? '';
-if (!is_string($content) || trim($content) === '') respond(502, ['success' => false, 'message' => 'Qwen returned no improved email.']);
+$aiResponse = json_decode($raw, true);
+if ($httpCode < 200 || $httpCode >= 300 || !is_array($aiResponse)) respond(502, ['success' => false, 'message' => 'The AI service returned an invalid response.']);
+$content = $aiResponse['choices'][0]['message']['content'] ?? '';
+if (!is_string($content) || trim($content) === '') respond(502, ['success' => false, 'message' => 'The AI service returned no improved email.']);
 
 $content = preg_replace('/^```(?:json)?\s*|\s*```$/i', '', trim($content));
 $improved = json_decode($content, true);
-if (!is_array($improved) || !is_string($improved['subject'] ?? null) || !is_string($improved['body'] ?? null)) {
-    respond(502, ['success' => false, 'message' => 'Qwen returned an unexpected format.']);
+if (!is_array($improved)) {
+    $jsonStart = strpos($content, '{');
+    $jsonEnd = strrpos($content, '}');
+    if ($jsonStart !== false && $jsonEnd !== false && $jsonEnd > $jsonStart) {
+        $improved = json_decode(substr($content, $jsonStart, $jsonEnd - $jsonStart + 1), true);
+    }
 }
+
+// If the model returns plain text instead of the requested JSON wrapper, keep
+// the rewrite usable rather than showing a format error to the user.
+if (!is_array($improved) || !is_string($improved['body'] ?? null)) {
+    $improved = ['subject' => $subject, 'body' => $content];
+}
+if (!is_string($improved['subject'] ?? null)) $improved['subject'] = $subject;
 
 respond(200, ['success' => true, 'subject' => trim($improved['subject']), 'body' => $improved['body']]);
