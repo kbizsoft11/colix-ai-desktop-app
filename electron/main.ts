@@ -1,9 +1,11 @@
 import { app, BrowserWindow, clipboard, ipcMain, screen, shell } from 'electron'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { createKeyboardHook } from './keyboardHook'
+
+const terminal = { reset: '\x1b[0m', cyan: '\x1b[36m', yellow: '\x1b[33m', green: '\x1b[32m' }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -27,6 +29,12 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 
 
 let win: BrowserWindow | null
 let fieldWindow: BrowserWindow | null = null
+let outlookButtonWindow: BrowserWindow | null = null
+let outlookAiWindow: BrowserWindow | null = null
+let outlookMonitor: NodeJS.Timeout | null = null
+let foregroundProbeRunning = false
+let lastForegroundProcessName = ''
+let lastOutlookDetected = false
 let keyboardHook: ReturnType<typeof createKeyboardHook> | null = null
 type HookShortcuts = Parameters<ReturnType<typeof createKeyboardHook>['start']>[0]
 type DynamicField = { label: string; defaultValue: string }
@@ -66,6 +74,179 @@ function getForegroundWindow(): string {
 function restoreForegroundWindow(handle: string): void {
   if (!handle) return
   spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Add-Type 'using System; using System.Runtime.InteropServices; public static class Win32 { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); }'; [Win32]::SetForegroundWindow([IntPtr]${handle})`], { windowsHide: true })
+}
+
+function getForegroundProcessName(): Promise<string> {
+  if (process.platform !== 'win32' || foregroundProbeRunning) return Promise.resolve('')
+  foregroundProbeRunning = true
+  return new Promise(resolve => {
+    const command = 'Add-Type \'using System; using System.Runtime.InteropServices; public static class ColixForeground { [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId); }\'; $handle=[ColixForeground]::GetForegroundWindow(); [uint32]$processId=0; [ColixForeground]::GetWindowThreadProcessId($handle, [ref]$processId) | Out-Null; (Get-Process -Id $processId -ErrorAction SilentlyContinue).ProcessName'
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { windowsHide: true })
+    let output = ''
+    let errorOutput = ''
+    child.stdout?.on('data', chunk => { output += chunk.toString() })
+    child.stderr?.on('data', chunk => { errorOutput += chunk.toString() })
+    child.on('close', () => {
+      foregroundProbeRunning = false
+      const rawProcessName = output.trim().toLowerCase()
+      const processName = rawProcessName && !rawProcessName.endsWith('.exe') ? `${rawProcessName}.exe` : rawProcessName
+      if (processName !== lastForegroundProcessName) {
+        lastForegroundProcessName = processName
+        console.log(`${terminal.cyan}[FOREGROUND]${terminal.reset} ${processName || '(unknown)'}`)
+      }
+      if (errorOutput.trim()) console.error(`${terminal.yellow}[FOREGROUND-PROBE]${terminal.reset} ${errorOutput.trim()}`)
+      resolve(processName)
+    })
+    child.on('error', () => {
+      foregroundProbeRunning = false
+      console.error(`${terminal.yellow}[FOREGROUND-PROBE]${terminal.reset} Unable to run PowerShell foreground detection`)
+      resolve('')
+    })
+  })
+}
+
+function createOutlookButtonWindow(): void {
+  if (outlookButtonWindow && !outlookButtonWindow.isDestroyed()) return
+  outlookButtonWindow = new BrowserWindow({
+    width: 58,
+    height: 58,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    focusable: true,
+    skipTaskbar: true,
+    show: false,
+    alwaysOnTop: true,
+    webPreferences: { contextIsolation: true, preload: path.join(__dirname, 'preload.mjs') },
+  })
+  outlookButtonWindow.setAlwaysOnTop(true, 'floating')
+  outlookButtonWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><meta charset="UTF-8"><style>*{box-sizing:border-box}html,body{margin:0;width:58px;height:58px;background:transparent;overflow:hidden}button{width:50px;height:50px;margin:4px;border:1px solid #34404d;border-radius:16px;color:#fff;background:#17212b;box-shadow:0 8px 22px #00000045,inset 0 1px #ffffff18;cursor:pointer;display:grid;place-items:center;transition:transform .16s ease,background .16s ease,box-shadow .16s ease}button:hover{background:#22303d;transform:translateY(-2px);box-shadow:0 11px 26px #00000055,inset 0 1px #ffffff22}svg{width:23px;height:23px;stroke:#8ee6aa;stroke-width:1.8;fill:none;stroke-linecap:round;stroke-linejoin:round}</style></head><body><button type="button" title="Improve Outlook email" aria-label="Improve Outlook email" onclick="window.ipcRenderer.send('open-outlook-ai-window')"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8A2.5 2.5 0 0 1 17.5 16H12l-4.5 4v-4h-1A2.5 2.5 0 0 1 4 13.5z"/><path d="m8 9 2.2 2.2L15.5 6"/></svg></button></body></html>`)}`)
+  outlookButtonWindow.on('closed', () => { outlookButtonWindow = null })
+}
+
+function createOutlookAiWindow(): void {
+  if (outlookAiWindow && !outlookAiWindow.isDestroyed()) {
+    outlookAiWindow.show()
+    outlookAiWindow.focus()
+    return
+  }
+
+  const html = `<!doctype html><html><head><meta charset="UTF-8"><style>
+  *{box-sizing:border-box}body{margin:0;color:#172033;background:#f7fbf8;font-family:"Segoe UI",Arial,sans-serif}.shell{padding:20px 24px 18px}.brand{display:flex;align-items:center;gap:9px;color:#13883d;font-size:14px;font-weight:700}.mark{display:grid;width:28px;height:28px;place-items:center;border-radius:9px;color:#fff;background:#1dac4b;box-shadow:0 4px 10px #1dac4b35}h1{margin:16px 0 6px;font-size:23px;font-weight:650;letter-spacing:-.4px}.intro{margin:0 0 16px;color:#667386;font-size:13px;line-height:1.45}.label{display:block;margin:0 0 6px;color:#536174;font-size:12px;font-weight:650}input,textarea{width:100%;border:1px solid #d5e2d8;border-radius:8px;outline:0;color:#172033;background:#fff;font:13px/1.45 "Segoe UI",Arial,sans-serif}input{height:38px;padding:0 11px;margin-bottom:13px}textarea{min-height:105px;padding:11px;resize:vertical}input:focus,textarea:focus{border-color:#1dac4b;box-shadow:0 0 0 3px #1dac4b22}.actions{display:flex;justify-content:flex-end;gap:9px;margin-top:13px}button{border:1px solid #cfe2d4;border-radius:8px;padding:9px 13px;color:#16883b;background:#fff;font:650 13px "Segoe UI",Arial,sans-serif;cursor:pointer}button:hover{background:#edf9f0}button.primary{border-color:#1dac4b;color:#fff;background:#1dac4b;box-shadow:0 4px 10px #1dac4b30}button.primary:hover{background:#168d3e}button:disabled{opacity:.6;cursor:wait}.result{display:none;margin-top:18px;padding-top:16px;border-top:1px solid #dce9df}.result.visible{display:block}.result-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;color:#172033;font-size:14px;font-weight:700}.result-subject{margin:0 0 10px;padding:10px 11px;border:1px solid #d5e2d8;border-radius:8px;color:#172033;background:#fff;font-size:13px;font-weight:600}.result-body{max-height:320px;overflow:auto;padding:12px;border:1px solid #d5e2d8;border-radius:8px;color:#354254;background:#fff;font-size:13px;line-height:1.55}.result-body p{margin:0 0 8px}.result-body p:last-child{margin-bottom:0}.result-body ul,.result-body ol{padding-left:22px}.result-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:12px}.status{min-height:18px;margin:10px 0 0;color:#667386;font-size:12px}.status.success{color:#087c39}.status.error{color:#b42318}
+  </style></head><body><main class="shell"><div class="brand"><span class="mark">✦</span><span>ColixAI for Outlook</span></div><section id="draftView"><h1>Improve your email</h1><p class="intro">Paste your draft below and ColixAI will make it clearer, more professional, and grammatically correct.</p><label class="label" for="subject">Subject</label><input id="subject" placeholder="Email subject"><label class="label" for="body">Body</label><textarea id="body" placeholder="Paste or type your email body here..."></textarea><div class="actions"><button id="close" type="button">Close</button><button id="rewrite" class="primary" type="button">✦ Rewrite with AI</button></div></section><p id="status" class="status"></p><section id="result" class="result"><div class="result-title"><span>Improved email</span></div><div id="resultSubject" class="result-subject"></div><div id="resultBody" class="result-body"></div><div class="result-actions"><button id="back" type="button">← Back</button><button id="copy" class="primary" type="button">Copy result</button></div></section></main><script>
+  const status=document.getElementById('status'),rewrite=document.getElementById('rewrite'),draftView=document.getElementById('draftView'),result=document.getElementById('result'),resultSubject=document.getElementById('resultSubject'),resultBody=document.getElementById('resultBody');let latest={subject:'',body:''};
+  const setStatus=(message,type='')=>{status.textContent=message;status.className='status '+type};
+  rewrite.onclick=()=>{const subject=document.getElementById('subject').value.trim(),body=document.getElementById('body').value.trim();if(!body){setStatus('Please enter an email body first.','error');return}rewrite.disabled=true;result.classList.remove('visible');setStatus('ColixAI is improving your email…');window.ipcRenderer.send('rewrite-outlook-email',{subject,body});};
+  document.getElementById('copy').onclick=()=>{window.ipcRenderer.send('copy-outlook-result',latest);setStatus('Copied improved email to the clipboard.','success')};
+  document.getElementById('close').onclick=()=>window.close();
+  document.getElementById('back').onclick=()=>{document.getElementById('subject').value='';document.getElementById('body').value='';latest={subject:'',body:''};resultSubject.textContent='';resultBody.innerHTML='';result.classList.remove('visible');draftView.style.display='block';setStatus('');document.getElementById('subject').focus()};
+  const safeHtml=value=>{const template=document.createElement('template');template.innerHTML=value;template.content.querySelectorAll('script,style,iframe,object,embed,form').forEach(node=>node.remove());template.content.querySelectorAll('*').forEach(node=>{[...node.attributes].forEach(attribute=>{if(attribute.name.toLowerCase().startsWith('on')||attribute.name.toLowerCase()==='style')node.removeAttribute(attribute.name);if((attribute.name==='href'||attribute.name==='src')&&/^javascript:/i.test(attribute.value))node.removeAttribute(attribute.name)});});return template.innerHTML};
+  window.ipcRenderer.on('outlook-rewrite-result',(_event,payload)=>{rewrite.disabled=false;if(!payload.success){setStatus(payload.message||'Unable to rewrite the email.','error');return}latest={subject:payload.subject||'',body:payload.body||''};resultSubject.textContent=latest.subject||'(No subject)';resultBody.innerHTML=safeHtml(latest.body);draftView.style.display='none';result.classList.add('visible');setStatus('Email improved successfully.','success')});
+  window.ipcRenderer.on('outlook-rewrite-error',(_event,message)=>{rewrite.disabled=false;setStatus(message,'error')});
+  document.getElementById('subject').focus();
+  </script></body></html>`
+
+  outlookAiWindow = new BrowserWindow({
+    width: 570,
+    height: 650,
+    minWidth: 500,
+    minHeight: 560,
+    resizable: true,
+    title: 'ColixAI for Outlook',
+    autoHideMenuBar: true,
+    alwaysOnTop: true,
+    webPreferences: { preload: path.join(__dirname, 'preload.mjs') },
+  })
+  outlookAiWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  outlookAiWindow.center()
+  outlookAiWindow.on('closed', () => { outlookAiWindow = null })
+}
+
+async function updateOutlookButton(): Promise<void> {
+  if (!outlookButtonWindow || outlookButtonWindow.isDestroyed()) return
+  const processName = await getForegroundProcessName()
+  const isOutlook = ['outlook.exe', 'olk.exe', 'microsoft.outlookforwindows.exe'].includes(processName)
+  // Clicking the button makes its own Electron window foreground. Keep it
+  // visible in that case; the button must not hide itself immediately.
+  const buttonOwnsFocus = processName === 'electron.exe' && outlookButtonWindow.isFocused()
+  const shouldShow = isOutlook || buttonOwnsFocus
+  if (shouldShow !== lastOutlookDetected) {
+    lastOutlookDetected = shouldShow
+    console.log(`${shouldShow ? terminal.green : terminal.yellow}[OUTLOOK]${terminal.reset} ${shouldShow ? `Detected ${isOutlook ? processName : 'ColixAI button'}; showing floating button` : 'Not foreground; hiding floating button'}`)
+  }
+  if (!shouldShow) {
+    if (outlookButtonWindow.isVisible()) outlookButtonWindow.hide()
+    return
+  }
+  const display = screen.getPrimaryDisplay().workArea
+  outlookButtonWindow.setPosition(display.x + display.width - 70, display.y + display.height - 70, false)
+  if (!outlookButtonWindow.isVisible()) outlookButtonWindow.show()
+}
+
+export function startOutlookButtonMonitor(): void {
+  createOutlookButtonWindow()
+  void updateOutlookButton()
+  outlookMonitor = setInterval(() => { void updateOutlookButton() }, 800)
+}
+
+export function readClassicOutlookDraft(): void {
+  const script = `$ErrorActionPreference='Stop'; try { $outlook=[Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application'); $inspector=$outlook.ActiveInspector(); if ($null -eq $inspector -or $null -eq $inspector.CurrentItem) { throw 'No active Classic Outlook compose window was found.' }; $item=$inspector.CurrentItem; [Console]::Write((@{ success=$true; subject=[string]$item.Subject; body=[string]$item.HTMLBody } | ConvertTo-Json -Compress)) } catch { [Console]::Write((@{ success=$false; message=$_.Exception.Message } | ConvertTo-Json -Compress)); exit 1 }`
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true })
+  let output = ''
+  child.stdout?.on('data', chunk => { output += chunk.toString() })
+  child.on('close', () => {
+    try {
+      const result = JSON.parse(output.trim()) as { success?: boolean; subject?: string; body?: string; message?: string }
+      if (!result.success) {
+        console.log(`${terminal.yellow}[OUTLOOK-READ]${terminal.reset} ${result.message || 'Unable to read the Classic Outlook draft'}`)
+        return
+      }
+      console.log(`${terminal.green}[OUTLOOK-READ]${terminal.reset} Classic Outlook draft detected`)
+      console.log(`${terminal.cyan}[OUTLOOK-SUBJECT]${terminal.reset} ${result.subject || '(empty)'}`)
+      console.log(`${terminal.cyan}[OUTLOOK-BODY]${terminal.reset} ${result.body || '(empty)'}`)
+    } catch (error) {
+      console.error(`${terminal.yellow}[OUTLOOK-READ]${terminal.reset} Invalid response from Outlook COM:`, error, output)
+    }
+  })
+  child.on('error', error => console.error(`${terminal.yellow}[OUTLOOK-READ]${terminal.reset} ${error.message}`))
+}
+
+async function rewriteOutlookEmail(payload: { subject?: string; body?: string }): Promise<void> {
+  if (!outlookAiWindow || outlookAiWindow.isDestroyed()) return
+  const subject = String(payload.subject || '').trim()
+  const body = String(payload.body || '').trim()
+  if (!body) return
+
+  console.log(`${terminal.cyan}[OUTLOOK-AI]${terminal.reset} Sending draft to rewrite endpoint (${body.length} characters)`)
+  try {
+    const response = await fetch('https://extensions.kbizsoft.com/colix-ai-desktop-app/improve-email.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, body }),
+    })
+    const result = await response.json() as { success?: boolean; subject?: string; body?: string; message?: string }
+    if (!response.ok || !result.success || typeof result.body !== 'string') {
+      throw new Error(result.message || `Rewrite request failed (${response.status})`)
+    }
+    console.log(`${terminal.green}[OUTLOOK-AI]${terminal.reset} Rewrite completed successfully`)
+    outlookAiWindow.webContents.send('outlook-rewrite-result', { success: true, subject: result.subject || subject, body: result.body })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to rewrite the email'
+    console.error(`${terminal.yellow}[OUTLOOK-AI]${terminal.reset} ${message}`)
+    if (!outlookAiWindow.isDestroyed()) outlookAiWindow.webContents.send('outlook-rewrite-result', { success: false, message })
+  }
+}
+
+function copyOutlookResult(payload: { subject?: string; body?: string }): void {
+  const subject = String(payload.subject || '').trim()
+  const body = String(payload.body || '').trim()
+  const plainText = `${subject ? `${subject}\n\n` : ''}${body.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')}`.trim()
+  clipboard.write({ text: plainText, html: body || plainText })
+  console.log(`${terminal.green}[OUTLOOK-AI]${terminal.reset} Improved email copied to clipboard`)
 }
 
 function escapeOverlayHtml(value: string): string {
@@ -170,6 +351,9 @@ app.on('activate', () => {
 
 app.whenReady().then(() => {
   createWindow()
+  // Disabled for now. Keep the floating Outlook implementation above for
+  // future use, but do not create or monitor its window.
+  startOutlookButtonMonitor()
 })
 
 process.on('uncaughtException', error => {
@@ -184,11 +368,27 @@ process.on('exit', code => console.log(`🛑 Node process exit: ${code}`))
 // Ensure the global listener is not left behind when the app is closed or
 // replaced during an uninstall/reinstall.
 app.on('before-quit', () => {
+  if (outlookMonitor) clearInterval(outlookMonitor)
+  outlookButtonWindow?.close()
+  outlookAiWindow?.close()
   fieldWindow?.close()
   keyboardHook?.stop()
 })
 
 // ========== IPC Handlers ==========
+
+ipcMain.on('open-outlook-ai-window', () => {
+  console.log(`${terminal.green}[OUTLOOK-AI]${terminal.reset} Opening rewrite window`)
+  createOutlookAiWindow()
+})
+
+ipcMain.on('rewrite-outlook-email', (_event, payload: { subject?: string; body?: string }) => {
+  void rewriteOutlookEmail(payload)
+})
+
+ipcMain.on('copy-outlook-result', (_event, payload: { subject?: string; body?: string }) => {
+  copyOutlookResult(payload)
+})
 
 ipcMain.handle('open-external-url', async (_event, url: string) => {
   if (!url.startsWith('https://')) throw new Error('Only HTTPS URLs can be opened externally')
